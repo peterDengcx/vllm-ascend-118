@@ -107,7 +107,8 @@ python tools/hy4/gpqa.py --concurrency 8
 ```
 
 `fast` 使用异步 + graph + MTP，预填批次上限为 1024，
-每 6 层卸载 1 层，减少传输和预填轮数。
+文本模型每 6 层卸载 1 层；多模态模型每 5 层卸载 1 层，
+为额外视觉模块和预热工作区保留显存，减少预填轮数。
 
 使用 [simple-evals 引用的 GPQA Diamond 数据](https://github.com/openai/simple-evals/blob/main/gpqa_eval.py)，
 完整 198 题、单轮、0-shot、选项置换种子 0、temperature 0、使用 structured choice 约束为 A/B/C/D、最多 1 个输出 token、

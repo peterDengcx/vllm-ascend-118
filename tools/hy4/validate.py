@@ -68,7 +68,7 @@ def launch(args):
         "--offload-backend",
         "prefetch",
         "--offload-group-size",
-        "3" if is_pd else "6" if args.stage == "fast" else "5",
+        "3" if is_pd else "6" if args.stage == "fast" and not args.multimodal else "5",
         "--offload-num-in-group",
         "2" if is_pd else "1",
         "--offload-prefetch-step",
