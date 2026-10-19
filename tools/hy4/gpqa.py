@@ -17,6 +17,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -47,18 +48,26 @@ def evaluate(args):
             + "\n".join(f"{letter}. {choices[choice]}" for letter, choice in zip("ABCD", permutation, strict=True))
         )
         cases.append((index, prompt, "ABCD"[permutation.index(0)]))
+    run_id = uuid.uuid4().hex
     settings = {
+        "run_id": run_id,
         "dataset_url": DATASET_URL,
         "dataset_sha256": hashlib.sha256(data).hexdigest(),
         "samples": len(cases),
         "repeats": 1,
         "seed": 0,
         "concurrency": args.concurrency,
-        "max_tokens": 16,
+        "max_tokens": 1,
         "temperature": 0,
         "reasoning_effort": "no_think",
-        "method": "0-shot direct answer",
+        "method": "0-shot direct answer, constrained choice",
+        "output_choices": list("ABCD"),
     }
+    state = args.directory / "server.json"
+    if state.exists():
+        server = json.loads(state.read_text())
+        settings["server_stage"] = server["stage"]
+        settings["server_command"] = server["command"]
     record(args.directory, "gpqa_start", settings, "Started", "started")
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -66,8 +75,15 @@ def evaluate(args):
         index, prompt, correct = case
         body = {
             "model": "hy4",
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 16,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Choose the correct option. Reply with exactly one uppercase letter: A, B, C, or D.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "structured_outputs": {"choice": list("ABCD")},
+            "max_tokens": 1,
             "temperature": 0,
             "chat_template_kwargs": {"reasoning_effort": "no_think"},
         }
@@ -84,11 +100,15 @@ def evaluate(args):
             with opener.open(request, timeout=600) as stream:
                 response = json.load(stream)
             content = response["choices"][0]["message"]["content"] or ""
+        except urllib.error.HTTPError as exc:
+            response = {"http_error_body": exc.read().decode("utf-8", errors="replace")}
+            error = repr(exc)
         except (OSError, ValueError, KeyError, IndexError) as exc:
             error = repr(exc)
         match = re.fullmatch(r"\s*(?:Answer\s*:\s*)?\(?([A-D])\)?[.。]?\s*", content, re.IGNORECASE)
         predicted = match.group(1).upper() if match else None
         result = {
+            "run_id": run_id,
             "index": index,
             "correct_answer": correct,
             "predicted_answer": predicted,
@@ -112,11 +132,19 @@ def evaluate(args):
         "correct": sum(result["correct"] for result in results),
         "unparsed": sum(result["predicted_answer"] is None for result in results),
         "request_errors": sum(result["error"] is not None for result in results),
+        "prompt_tokens": sum((result["response"] or {}).get("usage", {}).get("prompt_tokens", 0) for result in results),
+        "completion_tokens": sum(
+            (result["response"] or {}).get("usage", {}).get("completion_tokens", 0) for result in results
+        ),
         "seconds": time.monotonic() - started,
     }
     summary["accuracy"] = summary["correct"] / len(cases)
-    record(args.directory, "gpqa_complete", settings, summary, "completed")
+    record(
+        args.directory, "gpqa_complete", settings, summary, "completed" if not summary["request_errors"] else "failed"
+    )
     (args.directory / "gpqa-summary.json").write_text(json.dumps(summary, indent=2))
+    if summary["request_errors"]:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

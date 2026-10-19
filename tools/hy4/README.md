@@ -30,7 +30,7 @@ FULL_DECODE_ONLY ACLGraph，`mtp` 再增加 1 token MTP。
 关闭 NZ 转换以支持 pinned 权重的图捕获。
 
 所有阶段共用 `.vllm_ascend/hy4_adaptation/validation.log`，采用 JSONL 格式，
-逐项记录北京时间的完成时间、命令或请求、完整输出、状态和耗时。
+逐项记录北京时间的完成时间、命令或请求、完整输出和状态；请求与命令执行另有耗时。
 启动的详细输出另外保留在带时间戳的 server 日志中；启动失败时完整输出也写入统一日志。
 `run --label NAME --command COMMAND...` 可将额外的测试结果记录到同一日志。
 
@@ -38,6 +38,9 @@ FULL_DECODE_ONLY ACLGraph，`mtp` 再增加 1 token MTP。
 
 先停止单实例服务。P 使用设备 0–3，D 使用设备 4–7，每 3 层卸载 2 层，
 保留异步调度、decode graph 和 MTP。CPU 需要容纳两个模型的卸载权重。
+本机为 Ascend950 UB 网络，脚本在 PD 阶段默认设置
+`ASCEND_LOCAL_COMM_RES='{"version":"1.3"}'`，供 Mooncake 使用 HIXL 1.3 通信资源。
+其他硬件或网络应按部署环境配置该变量。
 
 ```bash
 python tools/hy4/validate.py launch --stage pd_prefill --port 8100
@@ -54,17 +57,25 @@ python tools/hy4/validate.py stop --stage pd_decode
 ```
 
 PD 使用本仓库的 MooncakeConnectorV1 和示例代理。检查 P/D 日志及传输指标，
-不能仅凭代理返回 200 就认定发生了 KV 传输。
+不能仅凭代理返回 200 就认定发生了 KV 传输。`metrics` 会同时检查 D 的
+`external_kv_transfer` token 计数大于零，以及实际完成传输的日志。
 
 ## 快速 GPQA
 
-启动最快的已验证单实例配置后执行：
+停止 PD 两端后，启动快速单实例配置并先复测，再执行精度测量：
 
 ```bash
+python tools/hy4/validate.py launch --stage fast
+python tools/hy4/validate.py wait
+python tools/hy4/validate.py smoke
+python tools/hy4/validate.py metrics --stage fast
 python tools/hy4/gpqa.py --concurrency 8
 ```
 
+`fast` 使用异步 + graph + MTP，预填批次上限为 1024，
+每 6 层卸载 1 层，减少传输和预填轮数。
+
 使用 [simple-evals 引用的 GPQA Diamond 数据](https://github.com/openai/simple-evals/blob/main/gpqa_eval.py)，
-完整 198 题、单轮、0-shot、选项置换种子 0、temperature 0、最多 16 个输出 token、
+完整 198 题、单轮、0-shot、选项置换种子 0、temperature 0、使用 structured choice 约束为 A/B/C/D、最多 1 个输出 token、
 `reasoning_effort=no_think`，直接输出选项字母。逐题输入输出和汇总写入统一日志，
 汇总另存 `gpqa-summary.json`。这种快速测量不能直接与公开的思维链或多轮结果比较。

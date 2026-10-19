@@ -6,10 +6,11 @@ import argparse
 import contextlib
 import json
 import os
+import re
 import signal
 import subprocess
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -23,9 +24,13 @@ def record(directory, stage, inputs, outputs, status):
         "input": inputs,
         "output": outputs,
     }
+    encoded = json.dumps(entry, ensure_ascii=False)
+    # Keep Unicode separators inside a single record for splitlines readers.
+    for separator in ("\u0085", "\u2028", "\u2029"):
+        encoded = encoded.replace(separator, json.dumps(separator)[1:-1])
     with (directory / "validation.log").open("a") as stream:
-        stream.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    print(json.dumps(entry, ensure_ascii=False), flush=True)
+        stream.write(encoded + "\n")
+    print(encoded, flush=True)
 
 
 def state_path(args):
@@ -55,7 +60,7 @@ def launch(args):
         "--max-num-seqs",
         "8",
         "--max-num-batched-tokens",
-        "512",
+        "1024" if args.stage == "fast" else "512",
         "--kv-cache-memory-bytes",
         "2147483648",
         "--gpu-memory-utilization",
@@ -63,7 +68,7 @@ def launch(args):
         "--offload-backend",
         "prefetch",
         "--offload-group-size",
-        "3" if is_pd else "5",
+        "3" if is_pd else "6" if args.stage == "fast" else "5",
         "--offload-num-in-group",
         "2" if is_pd else "1",
         "--offload-prefetch-step",
@@ -85,7 +90,7 @@ def launch(args):
             "--compilation-config",
             '{"cudagraph_mode":"FULL_DECODE_ONLY","cudagraph_capture_sizes":[1,2,4,8,16]}',
         ]
-    if args.stage == "mtp" or is_pd:
+    if args.stage in ("mtp", "fast") or is_pd:
         command += ["--speculative-config", '{"method":"mtp","num_speculative_tokens":1}']
     if is_pd:
         producer = args.stage == "pd_prefill"
@@ -94,7 +99,7 @@ def launch(args):
             "kv_buffer_device": "npu",
             "kv_role": "kv_producer" if producer else "kv_consumer",
             "kv_parallel_size": 1,
-            "kv_port": 20001 if producer else 20002,
+            "kv_port": 20001 if producer else 21001,
             "kv_rank": 0 if producer else 1,
             "kv_connector_extra_config": {
                 "prefill": {"tp_size": 4, "dp_size": 1},
@@ -111,12 +116,31 @@ def launch(args):
         HCCL_NPU_SOCKET_PORT_RANGE="auto",
         HCCL_HOST_SOCKET_PORT_RANGE="auto",
     )
+    if is_pd:
+        environment.setdefault("ASCEND_LOCAL_COMM_RES", '{"version":"1.3"}')
     logfile = args.directory / f"{args.stage}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-server.log"
     with logfile.open("w") as output:
         process = subprocess.Popen(
             command, stdout=output, stderr=subprocess.STDOUT, env=environment, start_new_session=True
         )
-    state = {"pid": process.pid, "stage": args.stage, "command": command, "log": str(logfile), "port": args.port}
+    state = {
+        "pid": process.pid,
+        "stage": args.stage,
+        "command": command,
+        "environment": {
+            key: environment[key]
+            for key in (
+                "ASCEND_RT_VISIBLE_DEVICES",
+                "HCCL_OP_EXPANSION_MODE",
+                "HCCL_NPU_SOCKET_PORT_RANGE",
+                "HCCL_HOST_SOCKET_PORT_RANGE",
+                "ASCEND_LOCAL_COMM_RES",
+            )
+            if key in environment
+        },
+        "log": str(logfile),
+        "port": args.port,
+    }
     state_path(args).write_text(json.dumps(state, indent=2))
     record(args.directory, args.stage + "_launch", command, state, "started")
 
@@ -138,7 +162,8 @@ def readiness(args):
             capture_output=True,
             text=True,
         )
-        if result.returncode == 0:
+        started = "Application startup complete." in Path(state["log"]).read_text(errors="replace")
+        if result.returncode == 0 and started:
             record(args.directory, state["stage"] + "_ready", state["command"], result.stdout, "passed")
             return
         try:
@@ -223,7 +248,9 @@ def smoke(args):
 
     failures = 0
     with ThreadPoolExecutor(max_workers=4) as executor:
-        for body, output, passed in executor.map(request, tests):
+        futures = [executor.submit(request, test) for test in tests]
+        for future in as_completed(futures):
+            body, output, passed = future.result()
             record(args.directory, state["stage"] + "_curl", body, output, "passed" if passed else "failed")
             failures += not passed
     if failures:
@@ -232,9 +259,70 @@ def smoke(args):
 
 def stop(args):
     state = json.loads(state_path(args).read_text())
+    started = time.monotonic()
     with contextlib.suppress(ProcessLookupError):
         os.killpg(state["pid"], signal.SIGTERM)
-    record(args.directory, state["stage"] + "_stop", {"process_group": state["pid"]}, "SIGTERM sent", "completed")
+    owned = {state["pid"]} | set(map(int, re.findall(r"pid=(\d+)", Path(state["log"]).read_text(errors="replace"))))
+
+    def alive(pid):
+        try:
+            return bool(Path(f"/proc/{pid}/cmdline").read_bytes())
+        except FileNotFoundError:
+            return False
+
+    deadline = time.monotonic() + 30
+    while any(alive(pid) for pid in owned) and time.monotonic() < deadline:
+        time.sleep(1)
+    killed = []
+    for pid in owned:
+        if alive(pid):
+            command = Path(f"/proc/{pid}/cmdline").read_bytes()
+            if b"VLLM::" in command or b"vllm" in command or b"load_balance_proxy" in command:
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(pid, signal.SIGKILL)
+                    killed.append(pid)
+    devices = set(range(8))
+    if state["stage"] == "pd_prefill":
+        devices = set(range(4))
+    elif state["stage"] == "pd_decode":
+        devices = set(range(4, 8))
+    elif state["stage"] == "pd":
+        devices = set()
+    # Device contexts can outlive their host processes while CANN releases
+    # captured graphs. Wait for device memory before launching the next stage.
+    deadline = time.monotonic() + 120
+    usage = {}
+    while devices and time.monotonic() < deadline:
+        status = subprocess.run(["npu-smi", "info"], capture_output=True, text=True, check=True)
+        current = None
+        usage = {}
+        for line in status.stdout.splitlines():
+            device = re.match(r"\|\s+(\d+)\s+\|\s+Ascend", line)
+            if device:
+                current = int(device.group(1))
+            memory = re.search(r"(\d+)\s*/\s*(\d+)\s*\|$", line)
+            if current is not None and memory and not device:
+                usage[current] = int(memory.group(1))
+                current = None
+        if all(device in usage and usage[device] < 8192 for device in devices):
+            break
+        time.sleep(2)
+    passed = not any(alive(pid) for pid in owned) and all(usage.get(device, 98304) < 8192 for device in devices)
+    record(
+        args.directory,
+        state["stage"] + "_stop",
+        {"process_group": state["pid"], "owned_pids": sorted(owned)},
+        {
+            "remaining_pids": [pid for pid in owned if alive(pid)],
+            "forced_pids": killed,
+            "device_memory_mb": usage,
+            "runtime_log_tail": Path(state["log"]).read_text(errors="replace").splitlines()[-20:],
+            "seconds": time.monotonic() - started,
+        },
+        "completed" if passed else "failed",
+    )
+    if not passed:
+        raise SystemExit(1)
 
 
 def run_command(args):
@@ -257,23 +345,72 @@ def run_command(args):
 
 def metrics(args):
     state = json.loads(state_path(args).read_text())
-    port = 8200 if args.stage == "pd" else state["port"]
+    port = 8200 if state["stage"] == "pd" else state["port"]
     command = ["curl", "--noproxy", "*", "-fsS", "--max-time", "10", f"http://127.0.0.1:{port}/metrics"]
     result = subprocess.run(command, capture_output=True, text=True)
     selected = [
         line
         for line in result.stdout.splitlines()
-        if not line.startswith("#") and any(key in line for key in ("spec_decode", "cudagraph", "kv_transfer"))
+        if not line.startswith("#")
+        and any(key in line for key in ("spec_decode", "cudagraph", "kv_transfer", "external_prefix_cache", "mooncake"))
     ]
-    (args.directory / f"{args.stage}-metrics.txt").write_text(result.stdout)
+    (args.directory / f"{state['stage']}-metrics.txt").write_text(result.stdout)
+    log_states = [state]
+    if state["stage"] == "pd":
+        log_states += [
+            json.loads((args.directory / f"{name}.json").read_text()) for name in ("pd_prefill", "pd_decode")
+        ]
+    runtime_log = []
+    for instance in log_states:
+        runtime_log += [
+            f"{instance['stage']}: {line}"
+            for line in Path(instance["log"]).read_text(errors="replace").splitlines()
+            if ("|" in line and ("FULL" in line or "NONE" in line))
+            or "Graph capturing finished" in line
+            or "ACL graph replay is active" in line
+            or "KV cache transfer for request" in line
+        ]
+    external_tokens = sum(
+        float(line.rsplit(" ", 1)[-1])
+        for line in selected
+        if 'source="external_kv_transfer"' in line and not line.split("{", 1)[0].endswith("_created")
+    )
+    transfer_count = sum("KV cache transfer for request" in line for line in runtime_log)
+    drafted_tokens = sum(
+        float(line.rsplit(" ", 1)[-1])
+        for line in selected
+        if line.startswith("vllm:spec_decode_num_draft_tokens_total{")
+    )
+    accepted_tokens = sum(
+        float(line.rsplit(" ", 1)[-1])
+        for line in selected
+        if line.startswith("vllm:spec_decode_num_accepted_tokens_total{")
+    )
+    graph_replayed = any("ACL graph replay is active" in line for line in runtime_log)
+    passed = result.returncode == 0
+    if state["stage"] in ("graph", "mtp", "fast", "pd"):
+        passed = passed and graph_replayed
+    if state["stage"] in ("mtp", "fast", "pd"):
+        passed = passed and drafted_tokens > 0
+    if state["stage"] == "pd":
+        passed = passed and external_tokens > 0 and transfer_count > 0
     record(
         args.directory,
-        args.stage + "_metrics",
+        state["stage"] + "_metrics",
         command,
-        {"metrics": selected, "stderr": result.stderr},
-        "passed" if result.returncode == 0 else "failed",
+        {
+            "metrics": selected,
+            "runtime_log": runtime_log,
+            "graph_replayed": graph_replayed,
+            "drafted_tokens": drafted_tokens,
+            "accepted_tokens": accepted_tokens,
+            "external_kv_tokens": external_tokens,
+            "completed_rank_transfers": transfer_count,
+            "stderr": result.stderr,
+        },
+        "passed" if passed else "failed",
     )
-    raise SystemExit(result.returncode)
+    raise SystemExit(0 if passed else 1)
 
 
 def proxy(args):
@@ -293,9 +430,18 @@ def proxy(args):
         "--decoder-ports",
         "8200",
     ]
-    logfile = args.directory / "pd-proxy.log"
+    logfile = args.directory / f"pd-proxy-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+    environment = dict(os.environ)
+    for name in ("NO_PROXY", "no_proxy"):
+        environment[name] = ",".join(filter(None, (environment.get(name), "127.0.0.1", "localhost")))
     with logfile.open("w") as output:
-        process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+        process = subprocess.Popen(
+            command,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            env=environment,
+            start_new_session=True,
+        )
     state = {"pid": process.pid, "stage": "pd", "command": command, "log": str(logfile), "port": args.port}
     state_path(args).write_text(json.dumps(state, indent=2))
     record(args.directory, "pd_proxy_launch", command, state, "started")
@@ -305,7 +451,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["launch", "wait", "smoke", "stop", "run", "proxy", "metrics"])
     parser.add_argument(
-        "--stage", choices=["eager", "async", "graph", "mtp", "pd_prefill", "pd_decode", "pd"], default="eager"
+        "--stage", choices=["eager", "async", "graph", "mtp", "fast", "pd_prefill", "pd_decode", "pd"], default="eager"
     )
     parser.add_argument("--model", default="/mnt/weight/Hy4-preview-FP8")
     parser.add_argument("--directory", type=Path, default=Path(".vllm_ascend/hy4_adaptation"))
