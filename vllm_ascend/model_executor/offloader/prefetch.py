@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch_npu
 from vllm.logger import logger
+from vllm.model_executor.offloader.base import should_pin_memory
 from vllm.model_executor.offloader.prefetch import (
     ParamInfo as VllmParamInfo,
 )
@@ -19,6 +20,7 @@ from vllm.model_executor.offloader.prefetch import (
 from vllm.model_executor.offloader.prefetch import (
     _ModuleOffloader as VllmModuleOffloader,
 )
+from vllm.utils.torch_utils import is_non_overlapping_and_dense
 
 from vllm_ascend.utils import ACL_FORMAT_FRACTAL_NZ
 
@@ -209,6 +211,39 @@ class _ModuleOffloader(VllmModuleOffloader):
             layer_idx=layer_idx,
         )
         self._wrap_process_weights_for_format_detection()
+
+    def _copy_param_to_static(self, cpu_storage: torch.Tensor, gpu_buffer: torch.Tensor) -> None:
+        # NPU copy_ of a transposed CPU tensor otherwise creates a pageable
+        # contiguous temporary. A raw-storage view preserves pinned DMA and
+        # graph capture when source and destination have the same dense layout.
+        if (
+            not cpu_storage.is_contiguous()
+            and cpu_storage.shape == gpu_buffer.shape
+            and cpu_storage.stride() == gpu_buffer.stride()
+            and is_non_overlapping_and_dense(cpu_storage)
+            and not _is_using_nz_weight(gpu_buffer)
+        ):
+            cpu_storage = cpu_storage.as_strided((cpu_storage.numel(),), (1,))
+            gpu_buffer = gpu_buffer.as_strided((gpu_buffer.numel(),), (1,))
+        gpu_buffer.copy_(cpu_storage, non_blocking=True)
+
+    def start_onload_to_static(self):
+        """Fork/join the copy stream and preserve pinned transposed weights."""
+        assert self._buffer_pool is not None, "Buffer pool not assigned"
+        self._prefetch_in_capture = torch.npu.is_current_stream_capturing()
+        fork_event = torch.npu.Event()
+        torch.npu.current_stream().record_event(fork_event)
+        self.copy_stream.wait_event(fork_event)
+        with torch.npu.stream(self.copy_stream):
+            for name, offloader in self._param_offloaders.items():
+                cpu_storage = offloader._cpu_storage
+                gpu_buffer = offloader._gpu_buffer
+                assert cpu_storage is not None, "CPU storage not initialized"
+                assert gpu_buffer is not None, "GPU buffer not assigned"
+                assert not should_pin_memory() or cpu_storage.is_pinned(), f"CPU storage for {name} is not pinned"
+                self._copy_param_to_static(cpu_storage, gpu_buffer)
+        self._copy_done_event.record(self.copy_stream)
+        self._event_valid_for_eager = not torch.npu.is_current_stream_capturing()
 
     def _capture_static_buffer_formats_from_npu_params(self) -> None:
         """

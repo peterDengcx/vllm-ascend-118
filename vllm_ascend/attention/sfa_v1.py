@@ -55,6 +55,7 @@ from vllm_ascend.distributed.kv_transfer.sparse_kv_offload.sparse_kv_offload_man
     OFFLOAD_KV_CACHE_TUPLE_LEN,
     OFFLOAD_V_CACHE_NPU_INDEX,
 )
+from vllm_ascend.ops.attention_sink import apply_attention_sink
 from vllm_ascend.ops.rotary_embedding import get_cos_and_sin_mla
 from vllm_ascend.quantization.methods import (
     AscendW8A8DynamicLinearMethod,
@@ -1676,7 +1677,12 @@ class AscendSFAImpl(MLAAttentionImpl):
             actual_seq_lengths_query,
             actual_seq_lengths_key,
             block_table=block_table,
+            return_lse=getattr(self, "learnable_sink_param", None) is not None,
         )
+        sink = getattr(self, "learnable_sink_param", None)
+        if sink is not None:
+            output, softmax_max, softmax_sum = output
+            output = apply_attention_sink(output, softmax_max, softmax_sum, sink)
         if self.qk_rope_head_dim == 0:
             # As in floating NoPE, graph-capacity rows may be unwritten by the kernel.
             assert isinstance(output, torch.Tensor)

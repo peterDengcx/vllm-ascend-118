@@ -49,6 +49,30 @@ from ..base import (
 )
 from ..registry import register_scheme
 
+MXFP8_SCALE_BIAS = 127
+MXFP8_SCALE_NAN = 255
+
+
+def dequantize_mxfp8(weight: torch.Tensor, scale: torch.Tensor, group_size: int, dtype: torch.dtype) -> torch.Tensor:
+    """Decode row-major E4M3 weights and their per-group E8M0 scales."""
+    if group_size <= 0 or weight.ndim != 2 or weight.shape[1] % group_size:
+        raise ValueError("MXFP8 weights require a 2D matrix with complete scale groups.")
+    expected = (weight.shape[0], weight.shape[1] // group_size)
+    if tuple(scale.shape) != expected or scale.dtype != torch.uint8:
+        raise ValueError(f"MXFP8 scale must be uint8 with shape {expected}, got {scale.dtype} {tuple(scale.shape)}.")
+    if torch.any(scale == MXFP8_SCALE_NAN):
+        raise ValueError("MXFP8 scale contains the reserved E8M0 NaN encoding.")
+    decoded_scale = torch.ldexp(torch.ones_like(scale, dtype=torch.float32), scale.to(torch.int32) - MXFP8_SCALE_BIAS)
+    return (weight.float().reshape(*expected, group_size) * decoded_scale.unsqueeze(-1)).reshape_as(weight).to(dtype)
+
+
+def _release_prefetch_weight_buffers(layer: torch.nn.Module, enabled: bool, *names: str) -> None:
+    if enabled:
+        # The offloader owns persistent device buffers. Tensor aliases on the
+        # layer would retain processed NPU weights after parameters move to CPU.
+        for name in names:
+            delattr(layer, name)
+
 
 @register_scheme("W8A8_MXFP8", "linear")
 class AscendW8A8MXFP8DynamicLinearMethod(AscendLinearScheme):
@@ -73,6 +97,8 @@ class AscendW8A8MXFP8DynamicLinearMethod(AscendLinearScheme):
 
     def __init__(self):
         vllm_config = get_current_vllm_config()
+        offload = getattr(vllm_config, "offload_config", None)
+        self.prefetch_offload = offload is not None and offload.offload_backend == "prefetch"
         quant_description = getattr(vllm_config.quant_config, "quant_description", None) or {}
         self.group_size = quant_description.get("group_size", 32)
         self.dynamic_mx_quant_scale_alg = get_dynamic_mx_quant_scale_alg(vllm_config)
@@ -181,6 +207,21 @@ class AscendW8A8MXFP8DynamicLinearMethod(AscendLinearScheme):
         data_ptr never changes across RL weight reloads.
         """
 
+        prefix = getattr(layer, "prefix", "")
+        if isinstance(prefix, str) and prefix.endswith(".kv_b_proj"):
+            # MLA absorbs this projection into W_UK/W_UV, so it needs the
+            # original dense matrix rather than the transposed QMM layout.
+            if layer.weight.dtype == torch.float8_e4m3fn:
+                device = layer.weight.device
+                layer.weight.data = dequantize_mxfp8(
+                    layer.weight.data.cpu(),
+                    layer.weight_scale.data.cpu(),
+                    self.group_size,
+                    get_current_vllm_config().model_config.dtype,
+                ).to(device)
+                del layer.weight_scale
+            return
+
         # Check if already transformed to avoid double transformation
         if getattr(layer, "_mxfp8_transformed", False):
             return
@@ -230,6 +271,7 @@ class AscendW8A8MXFP8DynamicLinearMethod(AscendLinearScheme):
 
         layer.weight.data = layer._mxfp8_weight_buf
         layer.weight_scale.data = layer._mxfp8_scale_buf
+        _release_prefetch_weight_buffers(layer, self.prefetch_offload, "_mxfp8_weight_buf", "_mxfp8_scale_buf")
 
         # Mark as transformed
         layer._mxfp8_transformed = True
@@ -293,6 +335,8 @@ class AscendW8A8MXFP8DynamicFusedMoEMethod(AscendMoEScheme):
 
     def __init__(self):
         vllm_config = get_current_vllm_config()
+        offload = getattr(vllm_config, "offload_config", None)
+        self.prefetch_offload = offload is not None and offload.offload_backend == "prefetch"
         quant_description = getattr(vllm_config.quant_config, "quant_description", None) or {}
         self.group_size = quant_description.get("group_size", 32)
         ascend_config = get_ascend_config()
@@ -457,6 +501,7 @@ class AscendW8A8MXFP8DynamicFusedMoEMethod(AscendMoEScheme):
                     weight_buffer.copy_(weight.data.transpose(1, 2).contiguous())
                     scale_buffer.copy_(target_scale.transpose(1, 2).contiguous())
                 weight.data, scale.data = layer._mxfp8_moe_buffers[weight_name]
+            _release_prefetch_weight_buffers(layer, self.prefetch_offload, "_mxfp8_moe_buffers")
             layer._mxfp8_transformed = True
             return
 
