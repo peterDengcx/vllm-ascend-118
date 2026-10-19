@@ -1,8 +1,9 @@
 """Ascend prefetch-based CPU offloading with NZ-format static buffers."""
 
 from collections.abc import Generator
+from contextlib import contextmanager
 from dataclasses import dataclass
-from functools import wraps
+from functools import partial, wraps
 from typing import Any
 
 import torch
@@ -26,6 +27,62 @@ from vllm_ascend.utils import ACL_FORMAT_FRACTAL_NZ
 
 # mark
 _ASCEND_PREFETCH_NZ_WEIGHT_ATTR = "_vllm_ascend_prefetch_offload_nz_weight"
+_ASCEND_PREFETCH_PARAMETER_ATTR = "_vllm_ascend_prefetch_offloaded"
+
+
+@contextmanager
+def _prefetch_device_loading_context(module: nn.Module, target_device: torch.device, *, fallback):
+    cpu_parameters = {
+        name: parameter for name, parameter in module.named_parameters() if parameter.device.type == "cpu"
+    }
+    if (
+        target_device.type != "npu"
+        or not cpu_parameters
+        or not all(getattr(parameter, _ASCEND_PREFETCH_PARAMETER_ATTR, False) for parameter in cpu_parameters.values())
+        or any(getattr(parameter, "_vllm_is_uva_offloaded", False) for parameter in cpu_parameters.values())
+    ):
+        with fallback(module, target_device):
+            yield module
+        return
+
+    # Quantization can transpose these weights without changing their storage
+    # size. Retain the existing pinned allocations instead of creating a second
+    # host copy of every offloaded expert during weight finalization.
+    host_storage = {name: parameter.data for name, parameter in cpu_parameters.items()}
+    for parameter in cpu_parameters.values():
+        parameter.data = parameter.data.to(target_device)
+    try:
+        yield module
+    finally:
+        for name, parameter in module.named_parameters():
+            original = host_storage.get(name)
+            if original is None:
+                continue
+            source = parameter.data
+            can_reuse = (
+                source.dtype == original.dtype
+                and source.numel() == original.numel()
+                and is_non_overlapping_and_dense(source)
+                and is_non_overlapping_and_dense(original)
+                and not _is_using_nz_weight(parameter)
+            )
+            if can_reuse:
+                restored = original.as_strided(source.shape, source.stride())
+                restored.as_strided((source.numel(),), (1,)).copy_(source.as_strided((source.numel(),), (1,)))
+            else:
+                # Repacked/padded/NZ schemes retain upstream's copy semantics.
+                restored = torch.empty_like(source, device="cpu", pin_memory=should_pin_memory()).copy_(source)
+            parameter.data = restored
+
+
+def _install_prefetch_loading_context() -> None:
+    # Lazy import avoids the model-loader/offloader initialization cycle.
+    # Remove this hook once upstream supports reusing host loading storage.
+    from vllm.model_executor.model_loader import utils as loader_utils
+
+    current = loader_utils.device_loading_context
+    if not (isinstance(current, partial) and current.func is _prefetch_device_loading_context):
+        loader_utils.device_loading_context = partial(_prefetch_device_loading_context, fallback=current)
 
 
 def mark_prefetch_offload_nz_weight(param: nn.Parameter) -> None:
@@ -158,6 +215,7 @@ class AscendPrefetchOffloader(PrefetchOffloader):
             mode=mode,
         )
         self.module_offloaders: list[_ModuleOffloader] = []
+        _install_prefetch_loading_context()
 
     def wrap_modules(
         self,
@@ -211,6 +269,8 @@ class _ModuleOffloader(VllmModuleOffloader):
             layer_idx=layer_idx,
         )
         self._wrap_process_weights_for_format_detection()
+        for offloader in self._param_offloaders.values():
+            setattr(offloader._param, _ASCEND_PREFETCH_PARAMETER_ATTR, True)
 
     def _copy_param_to_static(self, cpu_storage: torch.Tensor, gpu_buffer: torch.Tensor) -> None:
         # NPU copy_ of a transposed CPU tensor otherwise creates a pageable

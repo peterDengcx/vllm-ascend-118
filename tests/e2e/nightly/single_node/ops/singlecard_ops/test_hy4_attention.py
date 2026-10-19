@@ -7,8 +7,36 @@ import torch_npu
 import vllm_ascend.vllm_ascend_C  # noqa: F401
 
 from vllm_ascend.attention.indexer import AscendSFAIndexerBackend
-from vllm_ascend.model_executor.offloader.prefetch import _ModuleOffloader
+from vllm_ascend.model_executor.offloader.prefetch import (
+    _ASCEND_PREFETCH_PARAMETER_ATTR,
+    _ModuleOffloader,
+    _prefetch_device_loading_context,
+)
 from vllm_ascend.ops.attention_sink import apply_attention_sink
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float8_e4m3fn, torch.uint8])
+@pytest.mark.parametrize("contiguous", [False, True])
+@torch.inference_mode()
+def test_prefetch_loading_reuses_pinned_storage_after_transpose(dtype, contiguous):
+    source = (torch.arange(4096).reshape(2, 32, 64) % 11).to(dtype)
+    storage = torch.empty_like(source, pin_memory=True).copy_(source)
+    module = torch.nn.Module()
+    module.weight = torch.nn.Parameter(storage, requires_grad=False)
+    setattr(module.weight, _ASCEND_PREFETCH_PARAMETER_ATTR, True)
+    pointer = module.weight.data_ptr()
+
+    def unexpected_fallback(*args):
+        raise AssertionError("Marked dense weights should reuse their host storage")
+
+    with _prefetch_device_loading_context(module, torch.device("npu:0"), fallback=unexpected_fallback):
+        module.weight.data = module.weight.data.transpose(1, 2)
+        if contiguous:
+            module.weight.data = module.weight.data.contiguous()
+    assert module.weight.data_ptr() == pointer
+    assert module.weight.is_pinned()
+    assert module.weight.device.type == "cpu"
+    torch.testing.assert_close(module.weight.float(), source.transpose(1, 2).float(), rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float8_e4m3fn, torch.uint8])

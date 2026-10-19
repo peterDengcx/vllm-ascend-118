@@ -1,9 +1,28 @@
+from contextlib import contextmanager
 from types import SimpleNamespace
+from unittest.mock import Mock
 
+import torch
 from vllm.model_executor.offloader.base import NoopOffloader
 
 from vllm_ascend.model_executor.offloader.base import create_offloader
-from vllm_ascend.model_executor.offloader.prefetch import _is_using_nz_weight
+from vllm_ascend.model_executor.offloader.prefetch import _is_using_nz_weight, _prefetch_device_loading_context
+
+
+def test_prefetch_loading_preserves_unmarked_modules():
+    module = torch.nn.Linear(2, 4)
+    called = Mock()
+
+    @contextmanager
+    def fallback(actual_module, device):
+        called(actual_module, device)
+        yield actual_module
+
+    device = torch.device("npu:0")
+    with _prefetch_device_loading_context(module, device, fallback=fallback) as actual:
+        assert actual is module
+        assert actual.weight.device.type == "cpu"
+    called.assert_called_once_with(module, device)
 
 
 def test_create_offloader_without_config_returns_noop():
