@@ -2,6 +2,13 @@ from vllm import ModelRegistry
 
 
 def register_model():
+    from vllm_ascend.patch.hy4_vl.config import register_hy4_vl_config
+
+    register_hy4_vl_config()
+    ModelRegistry.register_model(
+        "HYV4VLForConditionalGeneration",
+        "vllm_ascend.patch.hy4_vl.model:HYV4VLForConditionalGeneration",
+    )
     ModelRegistry.register_model(
         "Gemma4ForConditionalGeneration",
         "vllm_ascend.models.gemma4_mm:AscendGemma4ForConditionalGeneration",

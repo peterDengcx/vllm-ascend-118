@@ -5,7 +5,41 @@
 MXFP8 KV 投影在加载时恢复为浮点矩阵，再由 SFA 吸收。
 
 目标权重 `/mnt/weight/Hy4-preview-FP8` 是文本检查点，不包含视觉模块。
-真实多模态适配和验证需要完整视觉权重。当前实现要求 PCP=1、DCP=1。
+插件内提供图像/视频处理器、视觉塔、投影和三维 MRoPE 的兼容实现，
+使用 GPU 参考代码的视觉配置默认值。当前实现要求 PCP=1、DCP=1。
+
+## 多模态链路测试
+
+`--multimodal` 将文本检查点组合为 `HYV4VLForConditionalGeneration`，
+通过显式 `ascend_random_vision_seed` 仅初始化缺失的视觉参数。
+文本和 MTP 参数继续加载实际 MXFP8 检查点；不修改检查点或 vLLM 源码。
+该文本检查点的模板不处理图像/视频内容项，因此启动脚本显式使用
+`--chat-template-content-format string`，由 vLLM 将媒体转换为模型占位符。
+固定种子默认 20261020，TP 分片从相同全量参数初始化。
+随机视觉权重仅验证结构和执行链路，不具有可靠的图像/视频理解能力。
+后续拿到完整 VL 检查点时，应使用其真实配置、处理器配置和权重，
+去掉随机初始化覆盖，重新验证语义精度。
+
+```bash
+python tools/hy4/validate.py launch --multimodal --stage eager --directory .vllm_ascend/hy4_multimodal
+python tools/hy4/validate.py wait --directory .vllm_ascend/hy4_multimodal
+python tools/hy4/validate.py smoke --directory .vllm_ascend/hy4_multimodal
+python tools/hy4/validate.py metrics --directory .vllm_ascend/hy4_multimodal
+python tools/hy4/validate.py stop --directory .vllm_ascend/hy4_multimodal
+```
+
+后续 `async`、`graph`、`mtp`、`pd_prefill`、`pd_decode` 和 `fast` 的
+`launch` 均追加相同的 `--multimodal --directory .vllm_ascend/hy4_multimodal`；
+其他操作追加相同目录。代理会继承 P 的多模态状态。
+全部完成时间、命令、请求和响应追加到该目录的单一 `validation.log`。
+
+多模态 smoke 在五项文本请求后执行六项实际 curl：单张红图、蓝图、
+非正方形图、两张交错图片、四帧 MP4 视频、带图长上下文。
+日志保留图片/视频的完整 data URL 和响应，并检查编码特征有限、
+不同图片产生不同特征、视觉 token 实际融合到语言模型。
+媒体内容使用随机视觉权重，不评判颜色识别或画面语义。
+诊断由 `ascend_vision_diagnostics` 显式启用，会同步设备读取少量统计值，
+性能测量可关闭该项。`graph` 捕获语言解码器，视觉编码器使用 eager。
 
 ## 分阶段测试
 

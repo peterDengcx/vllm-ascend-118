@@ -147,6 +147,15 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
         draft_vllm_config = copy.copy(draft_vllm_config)
         draft_vllm_config.model_config = copy.copy(draft_vllm_config.model_config)
         draft_vllm_config.model_config.runner_type = self.speculative_config.draft_model_config.runner_type
+        target_hf_config = getattr(draft_vllm_config.model_config, "hf_config", None)
+        if getattr(target_hf_config, "model_type", None) == "hy_v4_vl" and self.method == "mtp":
+            # The VL mapper prefixes target exclusions with language_model.
+            # MTP owns model.layers.* and lm_head, so use checkpoint names
+            # before its own exclusion remapper translates mtp_layers.*.
+            draft_vllm_config.quant_config = VllmConfig.get_quantization_config(
+                self.speculative_config.draft_model_config,
+                self.speculative_config.draft_load_config,
+            )
         return draft_vllm_config
 
     @staticmethod
@@ -1833,6 +1842,8 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
 
             # copy inputs to buffer for cudagraph
             self._set_positions(num_tokens, target_positions)
+            if self.uses_mrope and hasattr(cad, "rotary_positions"):
+                cad.rotary_positions = self._get_positions(num_tokens)
             self.hidden_states[:num_tokens] = target_hidden_states.view(num_tokens, -1)
 
             return num_tokens, token_indices_to_sample, cad, long_seq_args
@@ -2088,6 +2099,8 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
                 common_attn_metadata.num_computed_tokens_cpu[:batch_size] += 1
         if self.uses_mrope:
             common_attn_metadata.positions[:batch_size].copy_(clamped_positions[0])
+            if hasattr(common_attn_metadata, "rotary_positions"):
+                common_attn_metadata.rotary_positions = clamped_positions
         else:
             common_attn_metadata.positions[:batch_size].copy_(clamped_positions)
 
@@ -2365,6 +2378,11 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
             slot_mapping=common_attn_metadata.slot_mapping,
             actual_seq_lengths_q=self.runner.actual_seq_lengths_q,
             positions=common_attn_metadata.positions[token_indices],
+            rotary_positions=(
+                common_attn_metadata.rotary_positions[:, token_indices]
+                if common_attn_metadata.rotary_positions is not None
+                else None
+            ),
             positions_cpu=common_attn_metadata.positions_cpu[token_indices]
             if common_attn_metadata.positions_cpu is not None
             else None,
@@ -2461,6 +2479,7 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
             block_table_tensor=common_attn_metadata.block_table_tensor,
             slot_mapping=common_attn_metadata.slot_mapping,
             positions=common_attn_metadata.positions,
+            rotary_positions=getattr(common_attn_metadata, "rotary_positions", None),
             positions_cpu=common_attn_metadata.positions_cpu,
             attn_state=self.runner.attn_state,
             decode_token_per_req=self.runner.decode_token_per_req,

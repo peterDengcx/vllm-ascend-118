@@ -84,6 +84,8 @@ def _normalize_kimi_dflash_rope(hf_config: PretrainedConfig) -> None:
 
 
 def _normalize_legacy_qwen3_dspark_config(hf_config: PretrainedConfig) -> PretrainedConfig:
+    if hf_config.model_type == "hy_v4_vl":
+        hf_config = hf_config.text_config
     hf_config = _orig_hf_config_override(hf_config)
     _normalize_kimi_dflash_rope(hf_config)
     architectures = hf_config.architectures or ()

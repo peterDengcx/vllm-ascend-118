@@ -536,6 +536,7 @@ class AscendSFAIndexerMetadataBuilder(AttentionMetadataBuilder[AscendSFAIndexerM
         device: torch.device,
     ):
         super().__init__(kv_cache_spec, layer_names, vllm_config, device)
+        self.mrope_parameters = getattr(vllm_config.model_config.hf_text_config, "rope_parameters", None)
         # Match the logical block size selected for BlockTable.
         self.kernel_block_size = select_common_block_size(kv_cache_spec.block_size, [AscendSFAIndexerBackend])
         scheduler_config = vllm_config.scheduler_config
@@ -1052,10 +1053,15 @@ class AscendSFAIndexerMetadataBuilder(AttentionMetadataBuilder[AscendSFAIndexerM
                 buffer_key,
             )
         self._mask_lim_slot_mapping(common_attn_metadata, slot_mapping, buffer_key)
-        input_positions = common_attn_metadata.positions[:num_input_tokens].long()
+        rotary_positions = common_attn_metadata.positions
+        mrope_positions = getattr(common_attn_metadata, "rotary_positions", None)
+        if rotary_positions.ndim == 1 and isinstance(mrope_positions, torch.Tensor):
+            rotary_positions = mrope_positions
+        input_positions = rotary_positions[..., :num_input_tokens].long()
         block_size = self.kernel_block_size
 
-        cos, sin = get_cos_and_sin_mla(input_positions, use_cache=use_cached_rope)
+        rope_kwargs = {"rope_parameters": self.mrope_parameters} if input_positions.ndim == 2 else {}
+        cos, sin = get_cos_and_sin_mla(input_positions, use_cache=use_cached_rope, **rope_kwargs)
         cos = cos[:num_input_tokens]
         sin = sin[:num_input_tokens]
         cum_query_lens = common_attn_metadata.query_start_loc[1 : num_reqs + 1]

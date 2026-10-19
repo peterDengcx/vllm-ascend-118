@@ -39,6 +39,14 @@ class HeadwiseGate(nn.Module):
 class AscendHYV4MLAAttention(hy_attention.HYV4MLAAttention):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        if getattr(self.rotary_emb, "mrope_section", None):
+            from vllm_ascend.ops.rotary_embedding import _record_cos_and_sin_cache
+
+            if not hasattr(self.rotary_emb, "_ascend_mrope_cos"):
+                cos, sin = self.rotary_emb.cos_sin_cache.chunk(2, dim=-1)
+                self.rotary_emb.register_buffer("_ascend_mrope_cos", cos.repeat(1, 2), persistent=False)
+                self.rotary_emb.register_buffer("_ascend_mrope_sin", sin.repeat(1, 2), persistent=False)
+            _record_cos_and_sin_cache(self.rotary_emb._ascend_mrope_cos, self.rotary_emb._ascend_mrope_sin)
         deferred = self.mla_attn
         if not self.is_sparse or self.q_lora_rank is None:
             raise NotImplementedError("Ascend HY4 requires DSA layers with q_lora_rank.")

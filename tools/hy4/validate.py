@@ -92,6 +92,34 @@ def launch(args):
         ]
     if args.stage in ("mtp", "fast") or is_pd:
         command += ["--speculative-config", '{"method":"mtp","num_speculative_tokens":1}']
+    if args.multimodal:
+        command += [
+            "--hf-overrides",
+            json.dumps(
+                {
+                    "model_type": "hy_v4_vl",
+                    "architectures": ["HYV4VLForConditionalGeneration"],
+                    "ascend_random_vision_seed": args.random_vision_seed,
+                    "ascend_vision_diagnostics": True,
+                }
+            ),
+            "--chat-template-content-format",
+            "string",
+            "--limit-mm-per-prompt",
+            '{"image":2,"video":1}',
+            "--mm-processor-kwargs",
+            json.dumps(
+                {
+                    "images_kwargs": {"min_pixels": 4096, "max_pixels": 65536},
+                    "videos_kwargs": {
+                        "max_frames": 4,
+                        "max_pixels": 262144,
+                        "video_max_image_size": 256,
+                        "timestamp_token_reserve": 0,
+                    },
+                }
+            ),
+        ]
     if is_pd:
         producer = args.stage == "pd_prefill"
         transfer = {
@@ -126,6 +154,7 @@ def launch(args):
     state = {
         "pid": process.pid,
         "stage": args.stage,
+        "multimodal": args.multimodal,
         "command": command,
         "environment": {
             key: environment[key]
@@ -164,6 +193,8 @@ def readiness(args):
         )
         started = "Application startup complete." in Path(state["log"]).read_text(errors="replace")
         if result.returncode == 0 and started:
+            state["ready_log_offset"] = Path(state["log"]).stat().st_size
+            state_path(args).write_text(json.dumps(state, indent=2))
             record(args.directory, state["stage"] + "_ready", state["command"], result.stdout, "passed")
             return
         try:
@@ -253,6 +284,10 @@ def smoke(args):
             body, output, passed = future.result()
             record(args.directory, state["stage"] + "_curl", body, output, "passed" if passed else "failed")
             failures += not passed
+    if state.get("multimodal"):
+        from multimodal import smoke_multimodal
+
+        failures += smoke_multimodal(args, state)
     if failures:
         raise SystemExit(1)
 
@@ -369,6 +404,8 @@ def metrics(args):
             or "Graph capturing finished" in line
             or "ACL graph replay is active" in line
             or "KV cache transfer for request" in line
+            or "HY4_VL_" in line
+            or "HY4_RANDOM_VISION" in line
         ]
     external_tokens = sum(
         float(line.rsplit(" ", 1)[-1])
@@ -442,7 +479,16 @@ def proxy(args):
             env=environment,
             start_new_session=True,
         )
-    state = {"pid": process.pid, "stage": "pd", "command": command, "log": str(logfile), "port": args.port}
+    prefill_state = args.directory / "pd_prefill.json"
+    multimodal = json.loads(prefill_state.read_text()).get("multimodal", False) if prefill_state.exists() else False
+    state = {
+        "pid": process.pid,
+        "stage": "pd",
+        "command": command,
+        "log": str(logfile),
+        "port": args.port,
+        "multimodal": multimodal,
+    }
     state_path(args).write_text(json.dumps(state, indent=2))
     record(args.directory, "pd_proxy_launch", command, state, "started")
 
@@ -453,6 +499,8 @@ def main():
     parser.add_argument(
         "--stage", choices=["eager", "async", "graph", "mtp", "fast", "pd_prefill", "pd_decode", "pd"], default="eager"
     )
+    parser.add_argument("--multimodal", action="store_true")
+    parser.add_argument("--random-vision-seed", type=int, default=20261020)
     parser.add_argument("--model", default="/mnt/weight/Hy4-preview-FP8")
     parser.add_argument("--directory", type=Path, default=Path(".vllm_ascend/hy4_adaptation"))
     parser.add_argument("--port", type=int, default=8000)

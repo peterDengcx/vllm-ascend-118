@@ -91,18 +91,46 @@ def set_cos_and_sin(vllm_config, max_num_reqs, decode_token_per_req, dtype, devi
         _sin = torch.zeros(1, max_num_batched_tokens, 1, rope_dim, dtype=dtype, device=device)
 
 
-def get_cos_and_sin_mla(positions, use_cache=False):
+def gather_mrope_cache(cache, positions, section, interleaved):
+    """Select temporal/height/width frequencies before applying GPT-J or NeoX RoPE."""
+    if positions.ndim != 2 or positions.shape[0] != 3:
+        raise ValueError("MRoPE requires [3, tokens] positions")
+    half = cache.shape[-1] // 2
+    if len(section) != 3 or sum(section) != half:
+        raise ValueError("MRoPE sections must cover half the rotary dimension")
+    frequency = torch.arange(half, device=positions.device)
+    if interleaved:
+        height = (frequency % 3 == 1) & (frequency <= 3 * section[1])
+        width = (frequency % 3 == 2) & (frequency <= 3 * section[2])
+    else:
+        height = (frequency >= section[0]) & (frequency < section[0] + section[1])
+        width = frequency >= section[0] + section[1]
+    axes = height.long() + 2 * width.long()
+    selected_positions = positions.index_select(0, axes).transpose(0, 1)
+    values = cache[selected_positions, frequency]
+    return torch.cat((values, values), dim=-1).unsqueeze(1).unsqueeze(2)
+
+
+def get_cos_and_sin_mla(positions, use_cache=False, *, rope_parameters=None):
     global _cos_cache
     global _sin_cache
     global _cos_mla
     global _sin_mla
-    num_tokens = positions.size(0)
+    num_tokens = positions.shape[-1]
     # MLA-NoPE skip rope cache (e.g. GLM-5.3-Flash qk_rope_head_dim=0).
     # Do not copy indexer RoPE (last dim 32) into a 0-width MLA buffer.
     if _cos_mla is not None and _cos_mla.shape[-1] == 0:
         return _cos_mla[:num_tokens], _sin_mla[:num_tokens]
-    cos = _cos_cache[positions].unsqueeze(1).unsqueeze(2)
-    sin = _sin_cache[positions].unsqueeze(1).unsqueeze(2)
+    if positions.ndim == 2:
+        if rope_parameters is None:
+            raise ValueError("MRoPE metadata requires explicit rope_parameters")
+        section = rope_parameters["mrope_section"]
+        interleaved = rope_parameters.get("mrope_interleaved", False)
+        cos = gather_mrope_cache(_cos_cache, positions, section, interleaved)
+        sin = gather_mrope_cache(_sin_cache, positions, section, interleaved)
+    else:
+        cos = _cos_cache[positions].unsqueeze(1).unsqueeze(2)
+        sin = _sin_cache[positions].unsqueeze(1).unsqueeze(2)
     if not use_cache:
         return cos, sin
     if _cos_mla is None or _cos_mla.shape[-1] != cos.shape[-1]:

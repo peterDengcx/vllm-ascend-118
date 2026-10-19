@@ -151,9 +151,10 @@ def test_sfa_indexer_backend_contract():
     assert AscendSFAIndexerBackend.get_supported_kernel_block_sizes() == [128]
 
 
+@pytest.mark.parametrize("multimodal", [False, True])
 @patch("vllm_ascend.attention.indexer.get_ascend_config")
 @patch("vllm_ascend.attention.indexer.get_cos_and_sin_mla")
-def test_sfa_indexer_metadata_builder_builds_kernel_metadata(mock_cos_sin, mock_get_ascend_config):
+def test_sfa_indexer_metadata_builder_builds_kernel_metadata(mock_cos_sin, mock_get_ascend_config, multimodal):
     cos = torch.zeros(5, 1, 1, 8)
     sin = torch.zeros(5, 1, 1, 8)
     mock_cos_sin.return_value = (cos, sin)
@@ -163,6 +164,8 @@ def test_sfa_indexer_metadata_builder_builds_kernel_metadata(mock_cos_sin, mock_
     assert builder.get_cudagraph_support(MagicMock(), MagicMock()) is AttentionCGSupport.UNIFORM_BATCH
 
     common = _make_common_metadata()
+    if multimodal:
+        common.rotary_positions = torch.stack((common.positions, common.positions + 7, common.positions + 11))
     metadata = builder.build(0, common)
 
     assert isinstance(metadata, AscendSFAIndexerMetadata)
@@ -177,7 +180,8 @@ def test_sfa_indexer_metadata_builder_builds_kernel_metadata(mock_cos_sin, mock_
     assert metadata.num_decode_tokens == 0
 
     positions = mock_cos_sin.call_args.args[0]
-    assert torch.equal(positions, common.positions[:4])
+    expected_positions = common.rotary_positions[:, :4] if multimodal else common.positions[:4]
+    assert torch.equal(positions, expected_positions)
     assert mock_cos_sin.call_args.kwargs["use_cache"] is True
     assert torch.equal(metadata.cos, cos[:4])
     assert torch.equal(metadata.sin, sin[:4])

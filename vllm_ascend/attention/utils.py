@@ -317,6 +317,8 @@ class AscendCommonAttentionMetadata(CommonAttentionMetadata):
     # E.g., tensor([0, 1, 2, ...]) indicating token positions in sequence.
     positions: torch.Tensor = None
     positions_cpu: torch.Tensor = None
+    # Optional [3, tokens] positions for multimodal MLA/indexer RoPE.
+    rotary_positions: torch.Tensor | None = None
 
     # Current attention state (e.g., ChunkedPrefill, DecodeOnly).
     attn_state: Any = None

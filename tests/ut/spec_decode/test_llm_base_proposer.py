@@ -400,6 +400,33 @@ def test_draft_vllm_config_only_propagates_draft_runner_type():
     assert base_model_config.runner_type == "generate"
 
 
+def test_hy4_multimodal_mtp_uses_unprefixed_quantization_exclusions():
+    from vllm.config import VllmConfig
+    from vllm.models.hy_v4.nvidia.mtp import _remap_mtp_quant_exclusions
+
+    base = SimpleNamespace(
+        model_config=SimpleNamespace(runner_type="generate", hf_config=SimpleNamespace(model_type="hy_v4_vl")),
+        quant_config=SimpleNamespace(exclude_modules=["language_model.lm_head"]),
+    )
+    checkpoint_quant = SimpleNamespace(exclude_modules=["lm_head", "model.mtp_layers.0.self_attn.linear_gate"])
+    proposer = AscendSpecDecodeBaseProposer.__new__(AscendSpecDecodeBaseProposer)
+    proposer.method = "mtp"
+    proposer.speculative_config = SimpleNamespace(
+        draft_model_config=SimpleNamespace(runner_type="draft"), draft_load_config=object()
+    )
+    with (
+        patch(
+            "vllm.v1.spec_decode.llm_base_proposer.SpecDecodeBaseProposer._create_draft_vllm_config", return_value=base
+        ),
+        patch.object(VllmConfig, "get_quantization_config", return_value=checkpoint_quant),
+    ):
+        draft = proposer._create_draft_vllm_config()
+    remapped = _remap_mtp_quant_exclusions(draft.quant_config, 78, 1)
+    assert "lm_head" in remapped.exclude_modules
+    assert "model.layers.78.self_attn.linear_gate" in remapped.exclude_modules
+    assert base.quant_config.exclude_modules == ["language_model.lm_head"]
+
+
 class TestDisablePaddedDrafterBatchWithFullGraph:
     """Guard: ``disable_padded_drafter_batch=True`` + cuda graph + any full
     cudagraph mode must raise ``NotImplementedError``.

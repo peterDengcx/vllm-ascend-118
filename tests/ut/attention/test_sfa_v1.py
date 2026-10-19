@@ -916,6 +916,16 @@ class TestAscendSFAMetadataBuilder(TestBase):
         assert metadata.num_actual_tokens == common_attn_metadata.num_actual_tokens
         assert metadata.slot_mapping.shape == (100, 4, 1024)
 
+        # Rotary axes can differ from causal cache positions for image tokens.
+        common_attn_metadata.rotary_positions = torch.stack(
+            (common_attn_metadata.positions, common_attn_metadata.positions + 7, common_attn_metadata.positions + 11)
+        )
+        metadata = builder.build(common_prefix_len=10, common_attn_metadata=common_attn_metadata)
+        torch.testing.assert_close(
+            mock_get_cos_and_sin_mla.call_args.args[0], common_attn_metadata.rotary_positions.long()
+        )
+        assert metadata.slot_mapping.shape == (100, 4, 1024)
+
     @patch("vllm_ascend.attention.sfa_v1.get_current_vllm_config")
     @patch("vllm_ascend.attention.sfa_v1.get_cos_and_sin_mla")
     @patch("vllm.distributed.parallel_state.get_tp_group")

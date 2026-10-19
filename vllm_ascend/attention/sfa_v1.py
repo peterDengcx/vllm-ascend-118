@@ -514,6 +514,7 @@ class AscendSFAMetadataBuilder(MLACommonMetadataBuilder[AscendSFAMetadata]):
         )
 
         # Match the logical block size selected for BlockTable.
+        self.mrope_parameters = getattr(vllm_config.model_config.hf_text_config, "rope_parameters", None)
         self.kernel_block_size = select_common_block_size(kv_cache_spec.block_size, [AscendSFABackend])
 
         layer = vllm_config.compilation_config.static_forward_context[layer_names[0]]
@@ -653,7 +654,11 @@ class AscendSFAMetadataBuilder(MLACommonMetadataBuilder[AscendSFAMetadata]):
         block_table = common_attn_metadata.block_table_tensor[:num_reqs]
         pcp_slot_mapping = common_attn_metadata.slot_mapping
         slot_mapping = pcp_slot_mapping[:num_input_tokens]
-        input_positions = common_attn_metadata.positions[:num_input_tokens].long()
+        rotary_positions = common_attn_metadata.positions
+        mrope_positions = getattr(common_attn_metadata, "rotary_positions", None)
+        if rotary_positions.ndim == 1 and isinstance(mrope_positions, torch.Tensor):
+            rotary_positions = mrope_positions
+        input_positions = rotary_positions[..., :num_input_tokens].long()
 
         block_size = self.kernel_block_size
 
@@ -676,7 +681,8 @@ class AscendSFAMetadataBuilder(MLACommonMetadataBuilder[AscendSFAMetadata]):
         if self.nope:
             cos, sin = None, None
         else:
-            cos, sin = get_cos_and_sin_mla(input_positions, use_cache=(draft_index is None))
+            rope_kwargs = {"rope_parameters": self.mrope_parameters} if input_positions.ndim == 2 else {}
+            cos, sin = get_cos_and_sin_mla(input_positions, use_cache=(draft_index is None), **rope_kwargs)
 
         cos, sin, slot_mapping, parallel_metadata = self._prepare_parallel_metadata(
             common_attn_metadata,
