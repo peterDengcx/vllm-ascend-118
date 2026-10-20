@@ -24,6 +24,7 @@ from vllm.multimodal.processing import (
     cached_encode,
 )
 from vllm.multimodal.processing.processor import replace_token_matches
+from vllm.transformers_utils.repo_utils import get_hf_file_to_dict
 
 from vllm_ascend.patch.hy4_vl.config import HYV4VLConfig
 from vllm_ascend.patch.hy4_vl.processor import (
@@ -62,8 +63,19 @@ class HYV4VLProcessingInfo(BaseProcessingInfo):
             "temporal_patch_size": vision.temporal_patch_size,
         }
         options = self.ctx.get_merged_mm_kwargs(kwargs)
-        image = {**component, **options.get("images_kwargs", {})}
-        video = {**component, **options.get("videos_kwargs", {})}
+        model_config = self.ctx.model_config
+        image_config = get_hf_file_to_dict(
+            "preprocessor_config.json", model_config.model, revision=model_config.revision
+        )
+        if image_config is None:
+            image_config = self.ctx.get_hf_image_processor_config()
+        video_config = get_hf_file_to_dict(
+            "video_preprocessor_config.json", model_config.model, revision=model_config.revision
+        )
+        if video_config is None:
+            video_config = image_config
+        image = {**image_config, **component, **options.get("images_kwargs", {})}
+        video = {**video_config, **component, **options.get("videos_kwargs", {})}
         for name in ("min_pixels", "max_pixels"):
             if name in options:
                 image[name] = options[name]

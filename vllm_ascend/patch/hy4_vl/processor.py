@@ -275,6 +275,8 @@ class HYV4VLVideoProcessor(BaseVideoProcessor):
             num_frames = min(total, max(minimum, min(maximum, desired)))
         if not 0 < num_frames <= total:
             raise ValueError("num_frames must be positive and not exceed available frames")
+        if num_frames == total:
+            return np.arange(total, dtype=np.intp)
         segment = (total - 1) / num_frames
         return np.array(
             [
@@ -316,6 +318,17 @@ class HYV4VLVideoProcessor(BaseVideoProcessor):
             if do_convert_rgb:
                 video = self.convert_to_rgb(video)
             if do_resize:
+                # Apply the configured per-frame upsampling target before the
+                # total video budget. The budget may still require a smaller
+                # frame when min_pixels cannot fit all the sampled frames.
+                if h * w < size.shortest_edge:
+                    h, w = smart_resize(
+                        h,
+                        w,
+                        patch_size * merge_size,
+                        size.shortest_edge,
+                        max(size.shortest_edge, size.longest_edge // t),
+                    )
                 h, w = adaptive_resize(
                     h,
                     w,

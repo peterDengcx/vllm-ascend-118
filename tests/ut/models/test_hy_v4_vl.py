@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+import json
 from unittest.mock import Mock, patch
 
 import pytest
@@ -6,10 +7,12 @@ import torch
 from PIL import Image
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
+from transformers.video_utils import VideoMetadata
 
 from vllm_ascend.ops.rotary_embedding import gather_mrope_cache, get_cos_and_sin_mla
 from vllm_ascend.patch.hy4_vl.config import HYV4VLConfig
 from vllm_ascend.patch.hy4_vl.model import HYV4VLForConditionalGeneration
+from vllm_ascend.patch.hy4_vl.processing import HYV4VLProcessingInfo
 from vllm_ascend.patch.hy4_vl.processor import (
     HYV4VLImageProcessor,
     HYV4VLProcessor,
@@ -129,6 +132,90 @@ def test_image_processor_patch_layout_and_grid():
     assert torch.isfinite(result["pixel_values"]).all()
     assert not torch.equal(result["pixel_values"][:16], result["pixel_values"][16:32])
     assert vision_token_count([1, 4, 4], processor.config.vision_config, "image") == 6
+
+
+@pytest.mark.parametrize("separate_video_config", [False, True])
+def test_runtime_processor_preserves_checkpoint_normalization_and_overrides(separate_video_config):
+    original = make_processor()
+    context = Mock()
+    context.get_hf_config.return_value = original.config
+    context.get_tokenizer.return_value = original.tokenizer
+    context.get_hf_image_processor_config.return_value = {
+        "image_mean": [0.5, 0.5, 0.5],
+        "image_std": [0.5, 0.5, 0.5],
+        "min_pixels": 4096,
+        "max_pixels": 8192,
+    }
+    context.get_merged_mm_kwargs.return_value = {
+        "images_kwargs": {"max_pixels": 4096},
+        "videos_kwargs": {"max_frames": 4},
+    }
+    video_config = {"image_mean": [0.25] * 3, "image_std": [0.75] * 3, "max_frames": 10}
+    with patch(
+        "vllm_ascend.patch.hy4_vl.processing.get_hf_file_to_dict",
+        side_effect=lambda name, *args, **kwargs: (
+            video_config if name == "video_preprocessor_config.json" and separate_video_config else None
+        ),
+    ):
+        processor = HYV4VLProcessingInfo(context).get_hf_processor()
+    pixels = processor.image_processor(Image.new("RGB", (64, 64), "red"), return_tensors="pt")["pixel_values"]
+    channels = pixels.reshape(-1, 3, 16, 16).mean((0, 2, 3))
+    torch.testing.assert_close(channels, torch.tensor([1.0, -1.0, -1.0]))
+    assert processor.image_processor.size["longest_edge"] == 4096
+    assert processor.video_processor.max_frames == 4
+    assert list(processor.video_processor.image_mean) == ([0.25] * 3 if separate_video_config else [0.5] * 3)
+    assert list(processor.video_processor.image_std) == ([0.75] * 3 if separate_video_config else [0.5] * 3)
+
+
+def test_runtime_processor_reads_local_config_when_model_config_cache_is_empty(tmp_path):
+    original = make_processor()
+    context = Mock()
+    context.get_hf_config.return_value = original.config
+    context.get_tokenizer.return_value = original.tokenizer
+    context.get_hf_image_processor_config.return_value = {}
+    context.get_merged_mm_kwargs.return_value = {}
+    context.model_config.model = str(tmp_path)
+    context.model_config.revision = None
+    (tmp_path / "preprocessor_config.json").write_text(
+        json.dumps({"image_mean": [0.5] * 3, "image_std": [0.5] * 3, "min_pixels": 4096, "max_pixels": 4096})
+    )
+    processor = HYV4VLProcessingInfo(context).get_hf_processor()
+    pixels = processor(images=Image.new("RGB", (64, 64), "red"), return_tensors="pt")["pixel_values"]
+    assert pixels.shape == (16, 768)
+    torch.testing.assert_close(pixels.reshape(-1, 3, 16, 16).mean((0, 2, 3)), torch.tensor([1.0, -1.0, -1.0]))
+
+
+@pytest.mark.parametrize("total", [2, 4, 8])
+def test_video_sampling_preserves_all_available_frames(total):
+    processor = HYV4VLVideoProcessor()
+    metadata = VideoMetadata(total_num_frames=total, fps=2.0)
+    indices = processor.sample_frames(metadata, num_frames=total)
+    assert indices.tolist() == list(range(total))
+
+
+@pytest.mark.parametrize("minimum,maximum,side", [(4096, 524288, 64), (65536, 524288, 256), (65536, 4096, 32)])
+def test_video_minimum_pixels_and_total_budget(minimum, maximum, side):
+    processor = HYV4VLVideoProcessor()
+    frames = torch.zeros(4, 3, 64, 64, dtype=torch.uint8)
+    frames[0, 0] = 255
+    frames[1, 2] = 255
+    frames[2, 1] = 255
+    frames[3] = 255
+    result = processor(
+        [frames],
+        min_pixels=minimum,
+        max_pixels=maximum,
+        max_frames=4,
+        video_max_image_size=256,
+        timestamp_token_reserve=0,
+        return_tensors="pt",
+    )
+    assert result["video_grid_thw"].tolist() == [[4, side // 16, side // 16]]
+    assert result["pixel_values_videos"].shape == (4 * (side // 16) ** 2, 768)
+    assert 4 * side**2 <= maximum
+    means = result["pixel_values_videos"].reshape(4, -1, 3, 16, 16).mean((1, 3, 4))
+    expected = torch.tensor([[1.0, -1.0, -1.0], [-1.0, -1.0, 1.0], [-1.0, 1.0, -1.0], [1.0, 1.0, 1.0]])
+    torch.testing.assert_close(means, expected)
 
 
 @pytest.mark.parametrize("modality", ["image", "video"])
