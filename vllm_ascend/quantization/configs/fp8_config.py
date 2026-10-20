@@ -39,6 +39,13 @@ class AscendFp8Config(Fp8Config):
         self.quant_description = {}
 
     @classmethod
+    def from_config(cls, config):
+        # HY4 day0 accepts expert_dtype as an alias; retain it on older vLLM.
+        if "store_dtype" not in config and "expert_dtype" in config:
+            config = {**config, "store_dtype": config["expert_dtype"]}
+        return super().from_config(config)
+
+    @classmethod
     def get_min_capability(cls) -> int:
         raise NotImplementedError('Ascend hardware dose not support "get_min_capability" feature.')
 
@@ -92,6 +99,8 @@ class AscendFp8Config(Fp8Config):
             return AscendUnquantizedFusedMoEMethod(layer.moe_config, tid2eid)
 
         self._verify_block_quantization()
+        if is_moe and self.store_dtype == "mxfp4":
+            raise NotImplementedError("Packed MXFP4 experts cannot use the Ascend block-wise FP8 MoE loader.")
         logger.info_once("Using the vLLM Ascend block-wise fp8 Quantization now!")
 
         if is_linear:

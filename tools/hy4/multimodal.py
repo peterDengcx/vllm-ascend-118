@@ -4,13 +4,13 @@
 import base64
 import hashlib
 import json
-import re
 import subprocess
 import time
 from pathlib import Path
 
 import cv2
 import numpy as np
+import regex as re
 from PIL import Image, ImageDraw
 from validate import record
 

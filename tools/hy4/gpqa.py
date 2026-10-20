@@ -13,7 +13,6 @@ import hashlib
 import io
 import json
 import random
-import re
 import time
 import urllib.error
 import urllib.request
@@ -21,6 +20,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+import regex as re
 from validate import record
 
 DATASET_URL = "https://openaipublic.blob.core.windows.net/simple-evals/gpqa_diamond.csv"

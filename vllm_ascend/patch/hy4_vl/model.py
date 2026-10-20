@@ -3,11 +3,12 @@
 # Copyright 2025 The HunYuan team.
 
 from collections.abc import Iterable
+from copy import copy
 from typing import Annotated
 
 import torch
 from torch import nn
-from vllm.config import VllmConfig
+from vllm.config import VllmConfig, set_current_vllm_config
 from vllm.logger import logger
 from vllm.model_executor.models.interfaces import (
     MultiModalEmbeddings,
@@ -105,11 +106,16 @@ class HYV4VLForConditionalGeneration(
         with self._mark_tower_model(vllm_config, {"image", "video"}):
             self.visual = None
             if enabled:
-                self.visual = HYV4VisionTransformer(
-                    self.config.vision_config,
-                    quant_config=None,
-                    prefix=maybe_prefix(prefix, "visual"),
-                )
+                # RMSNorm reads the active config, even with quant_config=None
+                # on the tower. Keep text-only ModelSlim biases out of vision.
+                vision_vllm_config = copy(vllm_config)
+                vision_vllm_config.quant_config = None
+                with set_current_vllm_config(vision_vllm_config):
+                    self.visual = HYV4VisionTransformer(
+                        self.config.vision_config,
+                        quant_config=None,
+                        prefix=maybe_prefix(prefix, "visual"),
+                    )
         with self._mark_language_model(vllm_config):
             self.language_model = init_vllm_registered_model(
                 vllm_config=vllm_config,

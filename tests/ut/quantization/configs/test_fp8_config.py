@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
+import pytest
 import torch
 from vllm.model_executor.layers.fused_moe import MoERunner, RoutedExperts
 from vllm.model_executor.layers.linear import LinearBase
@@ -9,6 +10,41 @@ from vllm.model_executor.layers.vocab_parallel_embedding import VocabParallelEmb
 from tests.ut.base import TestBase
 from vllm_ascend.ops.linear import AscendUnquantizedLinearMethod
 from vllm_ascend.quantization.configs.fp8_config import AscendDeepseekV4FP8Config, AscendFp8Config
+
+
+@pytest.mark.parametrize(
+    "storage_fields, expected",
+    [
+        ({}, None),
+        ({"store_dtype": "mxfp4"}, "mxfp4"),
+        ({"expert_dtype": "mxfp4"}, "mxfp4"),
+        ({"store_dtype": "fp8", "expert_dtype": "mxfp4"}, "fp8"),
+    ],
+)
+def test_expert_storage_alias_preserves_format_and_precedence(storage_fields, expected):
+    checkpoint_config = {
+        "quant_method": "fp8",
+        "activation_scheme": "dynamic",
+        "weight_block_size": [128, 128],
+        **storage_fields,
+    }
+    original = checkpoint_config.copy()
+    config = AscendFp8Config.from_config(checkpoint_config)
+    assert config.store_dtype == expected
+    assert checkpoint_config == original
+
+
+def test_packed_mxfp4_experts_are_not_loaded_as_fp8():
+    config = AscendFp8Config.from_config(
+        {
+            "quant_method": "fp8",
+            "activation_scheme": "dynamic",
+            "weight_block_size": [128, 128],
+            "expert_dtype": "mxfp4",
+        }
+    )
+    with pytest.raises(NotImplementedError, match="Packed MXFP4 experts"):
+        config.get_quant_method(MagicMock(spec=RoutedExperts), "model.layers.0.mlp.experts")
 
 
 class TestAscendDeepseekV4FP8Config(TestBase):

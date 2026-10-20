@@ -17,7 +17,9 @@ def initialize_missing_vision_weights(visual: nn.Module, loaded: set[str], seed:
         return set()
     if seed is None:
         raise ValueError(
-            "HY4 visual weights are missing. Set ascend_random_vision_seed explicitly only for structural testing."
+            "HY4 visual weights are missing: "
+            + ", ".join(sorted(missing))
+            + ". Set ascend_random_vision_seed explicitly only for structural testing."
         )
     initialized = set()
     for module_name, module in visual.named_modules():

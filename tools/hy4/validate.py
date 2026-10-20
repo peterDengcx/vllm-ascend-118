@@ -6,7 +6,6 @@ import argparse
 import contextlib
 import json
 import os
-import re
 import signal
 import subprocess
 import time
@@ -14,6 +13,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+import regex as re
 
 
 def record(directory, stage, inputs, outputs, status):

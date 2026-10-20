@@ -7,16 +7,93 @@ CUDA attention allocation so exactly one live NPU KV cache is registered.
 This patch can be removed when HY4 exposes a platform MLA factory upstream.
 """
 
+from collections.abc import Iterable
+from functools import wraps
 from types import SimpleNamespace
 
 import torch
 from torch import nn
 from vllm.config import get_current_vllm_config
 from vllm.model_executor.layers.mla import MLAModules, MultiHeadLatentAttentionWrapper
+from vllm.model_executor.layers.quantization.fp8 import Fp8Config
+from vllm.model_executor.layers.quantization.kv_cache import KVCacheScaleParameter
+from vllm.model_executor.models.utils import get_pp_missing_layer_names
 from vllm.models.hy_v4.nvidia import attention as hy_attention
 from vllm.models.hy_v4.nvidia import model as hy_model
+from vllm.models.hy_v4.nvidia import mtp as hy_mtp
 
 from vllm_ascend.attention.sfa_v1 import AscendSFABackend
+from vllm_ascend.quantization.configs.fp8_config import AscendFp8Config
+
+_HYV4_MTP_LOAD_WEIGHTS = hy_mtp.HYV4MTP.load_weights
+_HYV4_CREATE_MTP_QUANT_CONFIG = hy_mtp._create_mtp_quant_config
+
+
+def _create_mtp_quant_config(hf_config, backbone_quant_config=None):
+    quant_config = _HYV4_CREATE_MTP_QUANT_CONFIG(hf_config, backbone_quant_config)
+    if type(quant_config) is Fp8Config:
+        # Explicit mtp_quant_algo=FP8 creates a GPU config even on Ascend.
+        ascend_config = AscendFp8Config(is_checkpoint_fp8_serialized=True)
+        ascend_config.__dict__.update(vars(quant_config))
+        return ascend_config
+    return quant_config
+
+
+def _prepare_mtp_fp8_expert_scale(quant_config, name, loaded_weight):
+    """Backport HY4 day0 scale decoding without changing packed expert bytes."""
+    if isinstance(quant_config, Fp8Config) and quant_config.weight_block_size is not None and name.endswith(".scale"):
+        name = name.removesuffix(".scale") + ".weight_scale_inv"
+        if loaded_weight.dtype == torch.uint8:
+            if getattr(quant_config, "is_scale_e8m0", False):
+                loaded_weight = loaded_weight.view(torch.float8_e8m0fnu)
+            elif ".mlp.experts." not in name:
+                loaded_weight = loaded_weight.view(torch.float8_e8m0fnu).float()
+    return name, loaded_weight
+
+
+def _checked_mtp_weights(model, weights):
+    """Reject an unpaired local FP8 indexer projection after streaming weights."""
+    pending = {}
+    missing_layers = get_pp_missing_layer_names(model)
+    for name, weight in weights:
+        if ".indexer.wk." in name:
+            normalized = name
+            if name.startswith("model.mtp_layers."):
+                parts = name.split(".")
+                spec_layer = None
+                if parts[2].isdigit():
+                    spec_layer = model.config.num_hidden_layers + int(parts[2])
+                    normalized = name.replace(f"model.mtp_layers.{parts[2]}.", f"model.layers.{spec_layer}.")
+            else:
+                spec_layer = hy_mtp._get_spec_layer_idx_from_weight_name(model.config, name)
+            if spec_layer is not None:
+                normalized = model._rewrite_spec_layer_name(spec_layer, normalized)
+                normalized, _ = _prepare_mtp_fp8_expert_scale(model.quant_config, normalized, weight)
+                if not any(normalized.startswith(prefix) for prefix in missing_layers):
+                    is_weight = normalized.endswith(".weight") and weight.dtype == torch.float8_e4m3fn
+                    is_scale = "weight_scale" in normalized
+                    if is_weight or is_scale:
+                        prefix = normalized.rsplit(".wk.", 1)[0]
+                        fields = pending.setdefault(prefix, set())
+                        fields.add("weight" if is_weight else "scale")
+                        if fields == {"weight", "scale"}:
+                            del pending[prefix]
+        yield name, weight
+    if pending:
+        raise ValueError("Incomplete MTP FP8 indexer weight/scale pairs: " + ", ".join(sorted(pending)))
+
+
+@wraps(_HYV4_MTP_LOAD_WEIGHTS)
+def _load_mtp_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+    loaded = _HYV4_MTP_LOAD_WEIGHTS(self, _checked_mtp_weights(self, weights))
+    missing_scales = sorted(
+        name
+        for name, param in self.named_parameters()
+        if "weight_scale" in name and name not in loaded and not isinstance(param, KVCacheScaleParameter)
+    )
+    if missing_scales:
+        raise ValueError("Missing MTP checkpoint weight scales: " + ", ".join(missing_scales))
+    return loaded
 
 
 class AscendHYV4Indexer(hy_attention.Indexer):
@@ -116,3 +193,6 @@ hy_attention.Indexer = AscendHYV4Indexer
 hy_attention.MLAAttention = _defer_mla_initialization
 hy_attention.HYV4MLAAttention = AscendHYV4MLAAttention
 hy_model.HYV4MLAAttention = AscendHYV4MLAAttention
+hy_mtp._create_mtp_quant_config = _create_mtp_quant_config
+hy_mtp._prepare_mtp_fp8_expert_scale = _prepare_mtp_fp8_expert_scale
+hy_mtp.HYV4MTP.load_weights = _load_mtp_weights

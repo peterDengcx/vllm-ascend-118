@@ -8,7 +8,9 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 from vllm.models.hy_v4.nvidia import attention as native_attention
+from vllm.models.hy_v4.nvidia import mtp as native_mtp
 
+from vllm_ascend.patch.worker import patch_hy_v4
 from vllm_ascend.patch.worker.patch_hy_v4 import AscendHYV4MLAAttention, HeadwiseGate
 from vllm_ascend.quantization.configs.fp8_config import AscendFp8Config
 from vllm_ascend.quantization.configs.modelopt_mxfp8_config import AscendModelOptMxFp8Config
@@ -114,3 +116,135 @@ def test_headwise_gate_broadcasts_each_head_without_mixing_heads():
     gate, bias = HeadwiseGate(projection, 3)(torch.zeros(1, 4))
     torch.testing.assert_close(gate, torch.tensor([[1.0, 1.0, 1.0, -2.0, -2.0, -2.0]]))
     assert bias is None
+
+
+@pytest.mark.parametrize(
+    "projection",
+    ["self_attn.q_b_proj", "self_attn.indexer.wk", "mlp.shared_experts.gate_proj", "mlp.experts.0.gate_proj"],
+)
+@pytest.mark.parametrize("scale_e8m0", [False, True])
+def test_mtp_scale_decodes_linear_values_and_preserves_packed_experts(projection, scale_e8m0):
+    config = AscendFp8Config(is_checkpoint_fp8_serialized=True, weight_block_size=[128, 128], store_dtype="mxfp4")
+    config.is_scale_e8m0 = scale_e8m0
+    prefix = f"model.layers.78.mtp_block.{projection}"
+    raw = torch.tensor([[126, 127, 128]], dtype=torch.uint8)
+    name, scale = native_mtp._prepare_mtp_fp8_expert_scale(config, prefix + ".scale", raw)
+    assert name == prefix + ".weight_scale_inv"
+    if scale_e8m0:
+        assert scale.dtype == torch.float8_e8m0fnu
+        torch.testing.assert_close(scale.float(), torch.tensor([[0.5, 1.0, 2.0]]))
+    elif ".mlp.experts." in prefix:
+        assert scale is raw
+    else:
+        assert scale.dtype == torch.float32
+        torch.testing.assert_close(scale, torch.tensor([[0.5, 1.0, 2.0]]))
+
+
+def test_explicit_mtp_fp8_uses_ascend_methods_and_keeps_loader_state():
+    config = native_mtp._create_mtp_quant_config(
+        SimpleNamespace(
+            mtp_quant_algo="FP8",
+            quantization_config={
+                "weight_block_size": [128, 128],
+                "scale_fmt": "ue8m0",
+                "modules_to_not_convert": ["model.mtp_layers.0.self_attn.linear_gate"],
+                "expert_dtype": "mxfp4",
+            },
+        )
+    )
+    assert isinstance(config, AscendFp8Config)
+    assert config.weight_block_size == [128, 128]
+    assert config.is_scale_e8m0
+    assert config.ignored_layers == ["model.mtp_layers.0.self_attn.linear_gate"]
+    assert config.store_dtype is None
+
+
+@pytest.mark.parametrize("algorithm", [None, "NONE"])
+def test_mtp_inherits_platform_quantization_config(algorithm):
+    backbone = AscendModelOptMxFp8Config.from_config(
+        {
+            "quant_method": "modelopt",
+            "quantization": {"quant_algo": "MXFP8", "kv_cache_quant_algo": None, "exclude_modules": []},
+        }
+    )
+    assert native_mtp._create_mtp_quant_config(SimpleNamespace(mtp_quant_algo=algorithm), backbone) is backbone
+
+
+@pytest.fixture
+def mtp_loader(monkeypatch):
+    """Exercise the upstream streaming loader with small CPU checkpoint tensors."""
+    monkeypatch.setattr(native_mtp, "get_tensor_model_parallel_world_size", lambda: 1)
+    monkeypatch.setattr(native_mtp, "get_tensor_model_parallel_rank", lambda: 0)
+    monkeypatch.setattr(native_mtp, "get_pp_missing_layer_names", lambda model: [])
+    monkeypatch.setattr(patch_hy_v4, "get_pp_missing_layer_names", lambda model: [])
+    monkeypatch.setattr(native_mtp, "is_pp_missing_parameter", lambda name, model: False)
+    monkeypatch.setattr(native_mtp, "fused_moe_make_expert_params_mapping", lambda *args, **kwargs: [])
+
+    def build(params):
+        model = native_mtp.HYV4MTP.__new__(native_mtp.HYV4MTP)
+        torch.nn.Module.__init__(model)
+        model.config = SimpleNamespace(
+            num_hidden_layers=78, num_nextn_predict_layers=1, n_routed_experts=0, num_attention_heads=1
+        )
+        model.quant_config = AscendFp8Config(is_checkpoint_fp8_serialized=True, weight_block_size=[128, 128])
+        model.named_parameters = lambda: iter(params.items())
+        return model
+
+    return build
+
+
+def test_mtp_loader_loads_linear_ue8m0_scale_numerically(mtp_loader):
+    name = "model.layers.78.mtp_block.self_attn.q_b_proj.weight_scale_inv"
+    scale = torch.nn.Parameter(torch.zeros(1, 3), requires_grad=False)
+    model = mtp_loader({name: scale})
+    loaded = model.load_weights(
+        iter([("model.mtp_layers.0.self_attn.q_b_proj.scale", torch.tensor([[126, 127, 128]], dtype=torch.uint8))])
+    )
+    assert loaded == {name}
+    torch.testing.assert_close(scale, torch.tensor([[0.5, 1.0, 2.0]]))
+
+
+def test_mtp_loader_rejects_missing_weight_scales(mtp_loader):
+    name = "model.layers.78.mtp_block.self_attn.q_b_proj.weight_scale_inv"
+    model = mtp_loader({name: torch.nn.Parameter(torch.zeros(1), requires_grad=False)})
+    with pytest.raises(ValueError, match="Missing MTP checkpoint weight scales.*q_b_proj"):
+        model.load_weights(iter([]))
+
+
+@pytest.mark.parametrize("field", ["weight", "weight_scale_inv"])
+def test_mtp_loader_rejects_unpaired_fp8_indexer_weights(mtp_loader, field):
+    name = "model.layers.78.mtp_block.self_attn.indexer.wk_weights_proj.weight"
+    model = mtp_loader({name: torch.nn.Parameter(torch.zeros(8, 32), requires_grad=False)})
+    tensor = torch.zeros(8, 32).to(torch.float8_e4m3fn) if field == "weight" else torch.ones(1, 1)
+    with pytest.raises(ValueError, match="Incomplete MTP FP8 indexer weight/scale pairs"):
+        model.load_weights(iter([(f"model.mtp_layers.0.self_attn.indexer.wk.{field}", tensor)]))
+
+
+@pytest.mark.parametrize("scale_first", [False, True])
+def test_mtp_loader_accepts_complete_fp8_indexer_pairs_in_either_order(mtp_loader, scale_first):
+    name = "model.layers.78.mtp_block.self_attn.indexer.wk_weights_proj.weight"
+    param = torch.nn.Parameter(torch.zeros(8, 32, dtype=torch.bfloat16), requires_grad=False)
+    param.weight_loader = lambda target, tensor, shard: target.data.copy_(tensor)
+    model = mtp_loader({name: param})
+    prefix = "model.mtp_layers.0.self_attn.indexer.wk"
+    weights = [
+        (prefix + ".weight", torch.ones(8, 32).to(torch.float8_e4m3fn)),
+        (prefix + ".weight_scale_inv", torch.full((1, 1), 2.0)),
+    ]
+    loaded = model.load_weights(iter(weights[::-1] if scale_first else weights))
+    assert loaded == {name}
+    torch.testing.assert_close(param, torch.full_like(param, 2.0))
+
+
+def test_mtp_loader_allows_runtime_default_kv_cache_scales(mtp_loader):
+    name = "model.layers.78.mtp_block.self_attn.attn.k_scale"
+    param = patch_hy_v4.KVCacheScaleParameter()
+    model = mtp_loader({name: param})
+    assert model.load_weights(iter([])) == set()
+
+
+def test_mtp_pair_check_ignores_other_pipeline_stages(mtp_loader, monkeypatch):
+    model = mtp_loader({})
+    monkeypatch.setattr(patch_hy_v4, "get_pp_missing_layer_names", lambda model: ["model.layers.78."])
+    weights = [("model.mtp_layers.0.self_attn.indexer.wk.weight", torch.zeros(8, 32).to(torch.float8_e4m3fn))]
+    assert list(patch_hy_v4._checked_mtp_weights(model, iter(weights))) == weights

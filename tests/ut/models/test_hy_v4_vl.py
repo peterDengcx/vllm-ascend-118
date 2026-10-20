@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import json
+from contextlib import nullcontext
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
@@ -8,7 +10,9 @@ from PIL import Image
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 from transformers.video_utils import VideoMetadata
+from vllm.config import VllmConfig, get_current_vllm_config, set_current_vllm_config
 
+from vllm_ascend.ops.layernorm import AscendRMSNorm
 from vllm_ascend.ops.rotary_embedding import gather_mrope_cache, get_cos_and_sin_mla
 from vllm_ascend.patch.hy4_vl.config import HYV4VLConfig
 from vllm_ascend.patch.hy4_vl.model import HYV4VLForConditionalGeneration
@@ -20,6 +24,40 @@ from vllm_ascend.patch.hy4_vl.processor import (
     vision_token_count,
 )
 from vllm_ascend.patch.hy4_vl.random_weights import initialize_missing_vision_weights
+
+
+def test_unquantized_vision_does_not_inherit_text_norm_bias_quantization(monkeypatch):
+    """ModelSlim text norm biases must not add an unexported bias to the BF16 vision tower."""
+    import vllm_ascend.patch.hy4_vl.model as model_module
+
+    quant_config = SimpleNamespace(quant_description={"model.layers.0.input_layernorm.bias": "FLOAT"})
+    config = VllmConfig()
+    config.quant_config = quant_config
+    config.model_config = SimpleNamespace(
+        hf_config=SimpleNamespace(vision_config=SimpleNamespace(), text_config=SimpleNamespace()),
+        get_multimodal_config=lambda: SimpleNamespace(get_limit_per_prompt=lambda modality: 1),
+    )
+
+    def make_vision(*args, **kwargs):
+        visual = torch.nn.Module()
+        visual.norm = AscendRMSNorm(8)
+        return visual
+
+    def make_language_model(**kwargs):
+        assert get_current_vllm_config().quant_config is quant_config
+        language_model = torch.nn.Module()
+        language_model.make_empty_intermediate_tensors = lambda *args: None
+        return language_model
+
+    monkeypatch.setattr(HYV4VLForConditionalGeneration, "_mark_tower_model", lambda *args: nullcontext())
+    monkeypatch.setattr(HYV4VLForConditionalGeneration, "_mark_language_model", lambda *args: nullcontext())
+    monkeypatch.setattr(model_module, "HYV4VisionTransformer", make_vision)
+    monkeypatch.setattr(model_module, "init_vllm_registered_model", make_language_model)
+    with set_current_vllm_config(config):
+        model = HYV4VLForConditionalGeneration(vllm_config=config)
+        assert model.visual.norm.bias is None
+        assert get_current_vllm_config().quant_config is quant_config
+    assert config.quant_config is quant_config
 
 
 @pytest.mark.parametrize("interleaved", [True, False])
