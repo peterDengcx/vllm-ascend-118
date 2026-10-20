@@ -170,6 +170,35 @@ def test_mtp_inherits_platform_quantization_config(algorithm):
     assert native_mtp._create_mtp_quant_config(SimpleNamespace(mtp_quant_algo=algorithm), backbone) is backbone
 
 
+@pytest.mark.parametrize("multimodal", [False, True])
+@pytest.mark.parametrize("provided_embeddings", [False, True])
+def test_mtp_masks_bos_without_broadcasting_mrope_axes(multimodal, provided_embeddings):
+    input_ids = torch.arange(3)
+    positions = torch.tensor([[0, 2, 5], [0, 0, 6], [0, 4, 0]]) if multimodal else torch.tensor([0, 2, 5])
+    embeddings = torch.arange(12, dtype=torch.float32).reshape(3, 4) + 1
+    previous_hidden_states = torch.ones(3, 4)
+    layer = Mock(side_effect=lambda ids, pos, hidden, embeds: embeds)
+    model = SimpleNamespace(
+        embed_tokens=Mock(return_value=embeddings),
+        spec_step_idx=1,
+        num_mtp_layers=2,
+        mtp_start_layer_idx=78,
+        layers={"79": layer},
+    )
+
+    result = native_mtp.HYV4MultiTokenPredictor.forward(
+        model, input_ids, positions, previous_hidden_states, embeddings if provided_embeddings else None
+    )
+
+    expected = embeddings.clone()
+    expected[0] = 0
+    torch.testing.assert_close(result, expected)
+    assert result.shape == previous_hidden_states.shape
+    assert layer.call_args.args[1] is positions
+    assert layer.call_args.args[2] is previous_hidden_states
+    assert model.embed_tokens.call_count == int(not provided_embeddings)
+
+
 @pytest.fixture
 def mtp_loader(monkeypatch):
     """Exercise the upstream streaming loader with small CPU checkpoint tensors."""

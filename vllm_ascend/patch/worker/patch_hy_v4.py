@@ -27,6 +27,21 @@ from vllm_ascend.quantization.configs.fp8_config import AscendFp8Config
 
 _HYV4_MTP_LOAD_WEIGHTS = hy_mtp.HYV4MTP.load_weights
 _HYV4_CREATE_MTP_QUANT_CONFIG = hy_mtp._create_mtp_quant_config
+_HYV4_MTP_FORWARD = hy_mtp.HYV4MultiTokenPredictor.forward
+
+
+@wraps(_HYV4_MTP_FORWARD)
+def _mtp_forward(self, input_ids, positions, previous_hidden_states, inputs_embeds=None):
+    if positions.ndim != 2:
+        return _HYV4_MTP_FORWARD(self, input_ids, positions, previous_hidden_states, inputs_embeds)
+    if inputs_embeds is None:
+        inputs_embeds = self.embed_tokens(input_ids)
+    # BOS masking uses the temporal axis; attention still needs all MRoPE axes.
+    inputs_embeds = torch.where((positions[0] == 0).unsqueeze(-1), 0, inputs_embeds)
+    current_step_idx = self.spec_step_idx % self.num_mtp_layers
+    return self.layers[str(self.mtp_start_layer_idx + current_step_idx)](
+        input_ids, positions, previous_hidden_states, inputs_embeds
+    )
 
 
 def _create_mtp_quant_config(hf_config, backbone_quant_config=None):
@@ -196,3 +211,4 @@ hy_model.HYV4MLAAttention = AscendHYV4MLAAttention
 hy_mtp._create_mtp_quant_config = _create_mtp_quant_config
 hy_mtp._prepare_mtp_fp8_expert_scale = _prepare_mtp_fp8_expert_scale
 hy_mtp.HYV4MTP.load_weights = _load_mtp_weights
+hy_mtp.HYV4MultiTokenPredictor.forward = _mtp_forward
