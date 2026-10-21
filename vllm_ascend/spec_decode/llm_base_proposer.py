@@ -2105,7 +2105,11 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
         if self.uses_mrope:
             common_attn_metadata.positions[:batch_size].copy_(clamped_positions[0])
             if hasattr(common_attn_metadata, "rotary_positions"):
-                common_attn_metadata.rotary_positions = clamped_positions
+                # Merged MTP keeps the first forward's padded input width in
+                # later steps, even though only one token per request is live.
+                # SFA needs a RoPE row for every input row; keep each step's
+                # positions independent from the first pass and other steps.
+                common_attn_metadata.rotary_positions = F.pad(clamped_positions, (0, input_batch_size - batch_size))
         else:
             common_attn_metadata.positions[:batch_size].copy_(clamped_positions)
 

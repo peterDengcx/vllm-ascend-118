@@ -4,6 +4,7 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import numpy as np
 import pytest
 import torch
 from vllm.config import CUDAGraphMode
@@ -167,3 +168,91 @@ def test_mrope_propose_aligns_inputs_rope_and_slots(
             target_model_batch_desc=SimpleNamespace(uniform=mode == CUDAGraphMode.FULL),
             sampling_metadata=None,
         )
+
+
+@pytest.mark.parametrize(
+    "num_input,mode",
+    [
+        pytest.param(2, CUDAGraphMode.NONE, id="unpadded-decode"),
+        pytest.param(293, CUDAGraphMode.NONE, id="prefill"),
+        pytest.param(306, CUDAGraphMode.NONE, id="dp-padded-prefill"),
+        pytest.param(16, CUDAGraphMode.FULL, id="graph-padded-decode"),
+    ],
+)
+@pytest.mark.parametrize("async_metadata", [False, True])
+def test_later_mrope_draft_steps_align_rope_with_model_inputs(monkeypatch, num_input, mode, async_metadata):
+    """All three merged MTP forwards need one RoPE row per model input row."""
+    batch_size = 2
+    proposer = AscendSpecDecodeBaseProposer.__new__(AscendSpecDecodeBaseProposer)
+    proposer.method = "mtp"
+    proposer.uses_mrope = True
+    proposer.max_model_len = 512
+    proposer.block_size = 128
+    proposer.has_gdn = False
+    proposer.use_compress = False
+    proposer.sliding_window = None
+    proposer.arange = torch.arange(num_input + 1, dtype=torch.int32)
+    proposer.token_arange_np = np.arange(num_input + 1, dtype=np.int32)
+    proposer.slot_mapping_group = [torch.full((num_input,), -1, dtype=torch.int32) for _ in range(3)]
+    proposer.seq_lens_group = [torch.zeros(num_input, dtype=torch.int32) for _ in range(3)]
+    proposer.query_start_loc_group = [torch.zeros(num_input + 1, dtype=torch.int32) for _ in range(3)]
+    proposer.runner = SimpleNamespace(dcp_manager=None)
+
+    rope_parameters = {"mrope_section": [12, 10, 10], "mrope_interleaved": True}
+    cache = torch.arange(1024 * 32, dtype=torch.float32).reshape(1024, 32).repeat(1, 2)
+    monkeypatch.setattr(rotary_embedding, "_cos_cache", cache)
+    monkeypatch.setattr(rotary_embedding, "_sin_cache", -cache)
+    builder = AscendSFAMetadataBuilder.__new__(AscendSFAMetadataBuilder)
+    builder.kernel_block_size = 128
+    builder.nope = False
+    builder.use_pcp = False
+    builder.decode_threshold = 4
+    builder.mrope_parameters = rope_parameters
+    builder.model_config = SimpleNamespace(get_head_size=lambda: 64)
+    builder.attn_mask_builder = SimpleNamespace(get_attention_mask=lambda *args: None)
+    builder.metadata_cls = AscendSFAMetadata
+    group = SimpleNamespace(get_metadata_builder=lambda: builder)
+
+    initial_positions = torch.tensor([[10, 20], [110, 120], [210, 220]], dtype=torch.int32)
+    positions = initial_positions.clone()
+    common = SimpleNamespace(
+        num_reqs=batch_size,
+        num_actual_tokens=num_input,
+        num_input_tokens=num_input,
+        seq_lens=torch.tensor([11, 21], dtype=torch.int32),
+        seq_lens_cpu=None if async_metadata else torch.tensor([11, 21], dtype=torch.int32),
+        _seq_lens_cpu=torch.tensor([11, 21], dtype=torch.int32),
+        num_computed_tokens_cpu=None,
+        positions=torch.arange(num_input, dtype=torch.int32),
+        rotary_positions=torch.full((3, num_input), 99, dtype=torch.int32),
+        block_table_tensor=torch.tensor([[2], [7]], dtype=torch.int32),
+        context_parallel_metadata=None,
+        max_seq_len=512,
+        causal=True,
+    )
+    original_common = common
+    previous_rope = previous_rope_values = None
+    for step in (1, 2):
+        common, sfa = proposer.attn_update_stack_num_spec_norm(
+            step, common, batch_size, num_input, positions, mode, attn_group=group
+        )
+        expected_positions = initial_positions + step
+        assert sfa.positions.shape == (3, num_input)
+        assert sfa.cos.shape == sfa.sin.shape == (num_input, 1, 1, 64)
+        torch.testing.assert_close(sfa.positions[:, :batch_size], expected_positions.long())
+        expected_cos, expected_sin = rotary_embedding.get_cos_and_sin_mla(
+            expected_positions, rope_parameters=rope_parameters
+        )
+        torch.testing.assert_close(sfa.cos[:batch_size], expected_cos)
+        torch.testing.assert_close(sfa.sin[:batch_size], expected_sin)
+        assert torch.count_nonzero(sfa.positions[:, batch_size:]) == 0
+        assert torch.all(sfa.slot_mapping[batch_size:] == -1)
+        assert sfa.slot_mapping[:batch_size].tolist() == [256 + 10 + step, 896 + 20 + step]
+        assert common.seq_lens[:batch_size].tolist() == [11 + step, 21 + step]
+        if previous_rope is not None:
+            assert sfa.cos.data_ptr() != previous_rope.data_ptr()
+            torch.testing.assert_close(previous_rope, previous_rope_values)
+        previous_rope, previous_rope_values = sfa.cos, sfa.cos.clone()
+
+    assert original_common.seq_lens.tolist() == [11, 21]
+    assert torch.all(original_common.rotary_positions == 99)
