@@ -14,7 +14,7 @@ from vllm_ascend.patch.worker import patch_hy_v4
 from vllm_ascend.patch.worker.patch_hy_v4 import AscendHYV4MLAAttention, HeadwiseGate
 from vllm_ascend.quantization.configs.fp8_config import AscendFp8Config
 from vllm_ascend.quantization.configs.modelopt_mxfp8_config import AscendModelOptMxFp8Config
-from vllm_ascend.quantization.configs.modelslim_config import AscendModelSlimConfig
+from vllm_ascend.quantization.configs.modelslim_config import AscendModelSlimConfig, get_quant_type_for_layer
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
@@ -168,6 +168,79 @@ def test_mtp_inherits_platform_quantization_config(algorithm):
         }
     )
     assert native_mtp._create_mtp_quant_config(SimpleNamespace(mtp_quant_algo=algorithm), backbone) is backbone
+
+
+@pytest.mark.parametrize("num_hidden_layers", [2, 78])
+@pytest.mark.parametrize("mtp_layer", [0, 1])
+def test_mtp_modelslim_loads_quantization_from_backbone_checkpoint(num_hidden_layers, mtp_layer):
+    checkpoint_prefix = f"model.mtp_layers.{mtp_layer}"
+    description = {
+        f"{checkpoint_prefix}.{projection}.weight": "W8A8_MXFP8"
+        for projection in ("self_attn.q_a_proj", "self_attn.kv_a_proj_with_mqa", "mlp.experts.0.gate_proj")
+    }
+    description["optional"] = {"metadata": "keep"}
+    original_description = description.copy()
+    backbone = AscendModelSlimConfig(description)
+    draft = native_mtp._create_mtp_quant_config(
+        SimpleNamespace(num_hidden_layers=num_hidden_layers, mtp_quant_algo=None), backbone
+    )
+
+    assert draft is not backbone
+    assert backbone.quant_description == original_description
+    assert draft.quant_description is not backbone.quant_description
+    assert draft.quant_description["optional"] == description["optional"]
+    for infix in ("", "mtp_block."):
+        prefix = f"model.layers.{num_hidden_layers + mtp_layer}.{infix}"
+        assert (
+            get_quant_type_for_layer(
+                draft.quant_description,
+                prefix + "self_attn.fused_qkv_a_proj",
+                native_mtp.HYV4MTP.packed_modules_mapping,
+            )
+            == "W8A8_MXFP8"
+        )
+        assert get_quant_type_for_layer(draft.quant_description, prefix + "mlp.experts.0.gate_proj") == "W8A8_MXFP8"
+
+
+def test_mtp_modelslim_preserves_explicit_runtime_descriptions():
+    description = {
+        "model.mtp_layers.0.self_attn.q_a_proj.weight": "W8A8_MXFP8",
+        "model.mtp_layers.0.self_attn.kv_a_proj_with_mqa.weight": "W8A8_MXFP8",
+        "model.layers.78.self_attn.q_a_proj.weight": "FLOAT",
+        "model.layers.78.self_attn.kv_a_proj_with_mqa.weight": "FLOAT",
+    }
+    draft = native_mtp._create_mtp_quant_config(
+        SimpleNamespace(num_hidden_layers=78, mtp_quant_algo=None), AscendModelSlimConfig(description)
+    )
+    assert (
+        get_quant_type_for_layer(
+            draft.quant_description,
+            "model.layers.78.self_attn.fused_qkv_a_proj",
+            native_mtp.HYV4MTP.packed_modules_mapping,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("kv_type, error", [(None, KeyError), ("FLOAT", ValueError)])
+def test_mtp_modelslim_rejects_incomplete_or_mixed_fused_quantization(kv_type, error):
+    description = {"model.mtp_layers.0.self_attn.q_a_proj.weight": "W8A8_MXFP8"}
+    if kv_type is not None:
+        description["model.mtp_layers.0.self_attn.kv_a_proj_with_mqa.weight"] = kv_type
+    draft = native_mtp._create_mtp_quant_config(
+        SimpleNamespace(num_hidden_layers=78, mtp_quant_algo=None), AscendModelSlimConfig(description)
+    )
+    with pytest.raises(error):
+        get_quant_type_for_layer(
+            draft.quant_description,
+            "model.layers.78.self_attn.fused_qkv_a_proj",
+            native_mtp.HYV4MTP.packed_modules_mapping,
+        )
+
+
+def test_mtp_modelslim_keeps_existing_runtime_layout():
+    backbone = AscendModelSlimConfig({"model.layers.78.self_attn.q_a_proj.weight": "W8A8_MXFP8"})
+    assert native_mtp._create_mtp_quant_config(SimpleNamespace(mtp_quant_algo=None), backbone) is backbone
 
 
 @pytest.mark.parametrize("multimodal", [False, True])

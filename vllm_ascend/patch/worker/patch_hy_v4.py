@@ -8,6 +8,7 @@ This patch can be removed when HY4 exposes a platform MLA factory upstream.
 """
 
 from collections.abc import Iterable
+from copy import copy
 from functools import wraps
 from types import SimpleNamespace
 
@@ -24,6 +25,7 @@ from vllm.models.hy_v4.nvidia import mtp as hy_mtp
 
 from vllm_ascend.attention.sfa_v1 import AscendSFABackend
 from vllm_ascend.quantization.configs.fp8_config import AscendFp8Config
+from vllm_ascend.quantization.configs.modelslim_config import AscendModelSlimConfig
 
 _HYV4_MTP_LOAD_WEIGHTS = hy_mtp.HYV4MTP.load_weights
 _HYV4_CREATE_MTP_QUANT_CONFIG = hy_mtp._create_mtp_quant_config
@@ -51,6 +53,25 @@ def _create_mtp_quant_config(hf_config, backbone_quant_config=None):
         ascend_config = AscendFp8Config(is_checkpoint_fp8_serialized=True)
         ascend_config.__dict__.update(vars(quant_config))
         return ascend_config
+    if isinstance(quant_config, AscendModelSlimConfig):
+        # ModelSlim keeps MTP under model.mtp_layers.N, while the draft
+        # decoder uses model.layers.(num_hidden_layers + N). Adapt only the
+        # draft config in memory so the original checkpoint remains usable.
+        aliases = {}
+        for name, scheme in quant_config.quant_description.items():
+            if not name.startswith("model.mtp_layers."):
+                continue
+            index, separator, suffix = name.removeprefix("model.mtp_layers.").partition(".")
+            if not separator or not index.isdigit():
+                continue
+            layer_prefix = f"model.layers.{hf_config.num_hidden_layers + int(index)}."
+            for infix in ("", "mtp_block."):
+                alias = layer_prefix + infix + suffix
+                if alias not in quant_config.quant_description:
+                    aliases[alias] = scheme
+        if aliases:
+            quant_config = copy(quant_config)
+            quant_config.quant_description = {**quant_config.quant_description, **aliases}
     return quant_config
 
 
