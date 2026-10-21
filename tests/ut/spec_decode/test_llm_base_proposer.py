@@ -89,6 +89,7 @@ def test_eager_propose_aligns_block_table_to_draft_batch(target_use_mla, draft_u
     proposer.hidden_size = 4
     proposer.use_cuda_graph = False
     proposer.parallel_drafting = True
+    proposer.uses_mrope = False
     proposer.dcp_size = dcp_size
     proposer.vllm_config = SimpleNamespace(model_config=SimpleNamespace(use_mla=target_use_mla))
     proposer.draft_model_config = SimpleNamespace(use_mla=draft_use_mla)

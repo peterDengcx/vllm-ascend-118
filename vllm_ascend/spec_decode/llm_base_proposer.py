@@ -1229,6 +1229,11 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
         common_attn_metadata.num_input_tokens = num_input_tokens
 
         self._pad_draft_buffers(num_tokens, num_input_tokens)
+        if self.uses_mrope:
+            # First-pass positions were sliced before DP/graph padding. SFA
+            # must build RoPE for the same rows consumed by the draft model.
+            common_attn_metadata.rotary_positions = self._get_positions(num_input_tokens)
+            common_attn_metadata.slot_mapping[num_tokens:num_input_tokens].fill_(-1)
         multi_steps_attn_metadata, attn_metadata_i = self.build_draft_attn_metadata(
             common_attn_metadata, num_input_tokens, num_tokens
         )
@@ -2665,9 +2670,18 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
         num_actual_tokens: int,
         num_input_tokens: int,
     ) -> None:
-        if not hasattr(self, "_per_group_block_table_buffers"):
-            return
         if num_input_tokens <= num_actual_tokens:
+            return
+        if not hasattr(self, "_per_group_block_table_buffers"):
+            if self.uses_mrope:
+                # Reused buffers can retain valid positions and embeddings
+                # from a larger batch. Padded tokens never write KV entries.
+                self._get_positions(num_input_tokens)[..., num_actual_tokens:].zero_()
+                self.input_ids[num_actual_tokens:num_input_tokens].zero_()
+                if self.pass_hidden_states_to_model:
+                    self.hidden_states[num_actual_tokens:num_input_tokens].zero_()
+                if self.supports_mm_inputs:
+                    self.inputs_embeds[num_actual_tokens:num_input_tokens].zero_()
             return
         self.input_ids[num_actual_tokens:num_input_tokens].fill_(self.parallel_drafting_token_id)
         self.positions[num_actual_tokens:num_input_tokens].fill_(0)
