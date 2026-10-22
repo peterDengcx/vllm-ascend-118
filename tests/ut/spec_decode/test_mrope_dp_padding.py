@@ -222,12 +222,13 @@ def test_later_mrope_draft_steps_align_rope_with_model_inputs(monkeypatch, num_i
         seq_lens=torch.tensor([11, 21], dtype=torch.int32),
         seq_lens_cpu=None if async_metadata else torch.tensor([11, 21], dtype=torch.int32),
         _seq_lens_cpu=torch.tensor([11, 21], dtype=torch.int32),
+        seq_lens_cpu_upper_bound=torch.tensor([11, 21], dtype=torch.int32),
         num_computed_tokens_cpu=None,
         positions=torch.arange(num_input, dtype=torch.int32),
         rotary_positions=torch.full((3, num_input), 99, dtype=torch.int32),
         block_table_tensor=torch.tensor([[2], [7]], dtype=torch.int32),
         context_parallel_metadata=None,
-        max_seq_len=512,
+        max_seq_len=21,
         causal=True,
     )
     original_common = common
@@ -249,10 +250,14 @@ def test_later_mrope_draft_steps_align_rope_with_model_inputs(monkeypatch, num_i
         assert torch.all(sfa.slot_mapping[batch_size:] == -1)
         assert sfa.slot_mapping[:batch_size].tolist() == [256 + 10 + step, 896 + 20 + step]
         assert common.seq_lens[:batch_size].tolist() == [11 + step, 21 + step]
+        assert common.max_seq_len == 21 + step
+        assert sfa.max_seq_len == common.max_seq_len
+        assert common.seq_lens_cpu_upper_bound.tolist() == [11 + step, 21 + step]
         if previous_rope is not None:
             assert sfa.cos.data_ptr() != previous_rope.data_ptr()
             torch.testing.assert_close(previous_rope, previous_rope_values)
         previous_rope, previous_rope_values = sfa.cos, sfa.cos.clone()
 
     assert original_common.seq_lens.tolist() == [11, 21]
+    assert original_common.seq_lens_cpu_upper_bound.tolist() == [11, 21]
     assert torch.all(original_common.rotary_positions == 99)

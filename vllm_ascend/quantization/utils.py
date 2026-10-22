@@ -50,7 +50,8 @@ def get_dynamic_mx_quant_scale_alg(vllm_config=None) -> int:
     ``scale_alg=0`` derives a shared exponent directly from the block's
     maximum absolute value. ``scale_alg=1`` first maps that maximum to the
     destination FP8 range, then rounds the E8M0 scale exponent up to avoid
-    quantization overflow. MiniMax M3 checkpoints require the latter.
+    quantization overflow. HY4's GPU MXFP8 quantizer and MiniMax M3
+    checkpoints require the latter.
     """
     if not get_current_hardware_profile().supports(HardwareCapability.DYNAMIC_MX_QUANT_SCALE_ALG_ONE):
         return 0
@@ -73,10 +74,10 @@ def get_dynamic_mx_quant_scale_alg(vllm_config=None) -> int:
         architectures = (architectures,)
     hf_text_config = getattr(model_config, "hf_text_config", None)
     model_type = getattr(hf_text_config, "model_type", None)
-    if (
-        any(isinstance(architecture, str) and architecture.startswith("MiniMaxM3") for architecture in architectures)
-        or model_type == "minimax_m3"
-    ):
+    if any(
+        isinstance(architecture, str) and architecture.startswith(("MiniMaxM3", "HYV4"))
+        for architecture in architectures
+    ) or model_type in ("minimax_m3", "hy_v4", "hy_v4_vl"):
         return 1
     return 0
 

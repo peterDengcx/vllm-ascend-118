@@ -291,6 +291,28 @@ class TestTokenDispatcherWithMC2(TestBase):
         self.assertEqual(mock_dispatch.call_args.kwargs["expert_token_nums_type"], EXPERT_TOKEN_NUMS_TYPE_COUNT)
         self.assertEqual(output.group_list_type, EXPERT_TOKEN_NUMS_TYPE_COUNT)
 
+    def test_mxfp8_ceil_dispatch_keeps_bf16_and_discards_unused_scales(self):
+        self.dispatcher.need_shared_expert_args = True
+        states = torch.full((2, 128), 1.875, dtype=torch.bfloat16)
+        inputs = build_token_dispatch_input_fixture(
+            hidden_states=states,
+            topk_weights=torch.ones(2, 1),
+            topk_ids=torch.zeros(2, 1, dtype=torch.int32),
+            expert_map=torch.arange(8),
+            quant_type=QuantType.W8A8MXFP,
+            comm_quant_mode=0,
+            act_quant_type=torch.float8_e4m3fn,
+        )
+        # CANN's unquantized mode may still return an unused scale tensor.
+        operator_output = (states, torch.empty(0), torch.zeros(1), torch.tensor([2]), torch.zeros(1), None, None)
+        with patch("torch_npu.npu_moe_distribute_dispatch_v2", return_value=operator_output) as dispatch:
+            output = self.dispatcher.token_dispatch(inputs)
+
+        self.assertEqual(dispatch.call_args.kwargs["quant_mode"], 0)
+        self.assertNotIn("y_dtype", dispatch.call_args.kwargs)
+        self.assertEqual(output.hidden_states.dtype, torch.bfloat16)
+        self.assertIsNone(output.dynamic_scale)
+
     def test_w4a8_group_dispatch_keeps_prefix_sum_group_list(self):
         hidden_states = torch.randn(10, 128)
         topk_weights = torch.randn(10, 1)

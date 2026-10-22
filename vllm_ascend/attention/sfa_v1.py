@@ -1075,6 +1075,10 @@ class AscendSFAImpl(MLAAttentionImpl):
         quant_method = self._get_layer_quant_method(self.fused_qkv_a_proj)
         qt = type(quant_method) if quant_method is not None else None
         if pp_type is PreprocessType.PROLOG_V3:
+            if qt is AscendW8A8MXFP8DynamicLinearMethod and getattr(quant_method, "dynamic_mx_quant_scale_alg", 0) == 1:
+                # Prolog's internal query quantizer has a fixed exponent rule
+                # and clips values that the GPU ceil-scale quantizer preserves.
+                reasons.append("PROLOG_V3 cannot honor ceil MXFP8 scales; use native preprocessing.")
             # Prolog's indexer query can carry quantization scales independently
             # of the MLA weight type. Preserve the native query for an
             # unquantized indexer, including layers that later toggle skip_topk.

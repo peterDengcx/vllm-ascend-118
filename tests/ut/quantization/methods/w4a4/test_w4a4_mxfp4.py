@@ -313,7 +313,9 @@ class TestAscendW4A4MXFP4MoEMethod(TestBase):
         mlp_compute_input.group_list = torch.tensor([4], dtype=torch.int64)
         mlp_compute_input.group_list_type = 0
 
-        self.scheme.apply_gmm1(mlp_compute_input)
+        # Input quantization is implemented in the shared MoE base class.
+        with patch("vllm_ascend.quantization.methods.base.torch_npu", mock_npu):
+            self.scheme.apply_gmm1(mlp_compute_input)
 
         kwargs = mock_npu.npu_grouped_matmul.call_args.kwargs
         self.assertEqual(kwargs["x_dtype"], mock_npu.float4_e2m1fn_x2)

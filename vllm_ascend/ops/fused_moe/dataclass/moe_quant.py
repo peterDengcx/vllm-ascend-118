@@ -70,6 +70,8 @@ class MoEQuantParams:
 
     @property
     def dispatch_with_quant(self) -> bool:
+        if self.comm_quant_mode == 0:
+            return False
         return self.quant_type in (
             QuantType.W8A8,
             QuantType.W4A8,

@@ -308,6 +308,36 @@ The expected result is as follows:
 
 ## 7 Accuracy Evaluation
 
+For MXFP8 inference on A5, HY4 uses ceil-rounded E8M0 activation scales,
+matching the GPU quantizer. The MLA prolog, fused MoE dispatch, and fused
+GMM1/SwiGLU operators do not expose this scale rule, so these layers use
+separate quantization and projection operations. Routed and shared experts
+also apply the checkpoint's `swiglu_limit` before SwiGLU. When a fused MC2
+backend is selected, MXFP8 layers requiring ceil scales fall back to staged
+AlltoAll and retain its weight layout. Benchmark these paths when
+assessing the performance cost of the accuracy fixes.
+
+For AISBench, configure HY4's reasoning delimiters explicitly in the model
+configuration. The default `extract_non_reasoning_content` delimiters are
+`<think>` and `</think>`, whereas HY4 high reasoning outputs normally end
+with `</think:opensource>`. Leaving the defaults can make the dataset's answer
+extractor select an option from the reasoning instead of the final answer.
+
+```python
+from ais_bench.benchmark.utils.postprocess.model_postprocessors import extract_non_reasoning_content
+
+pred_postprocessor = dict(
+    type=extract_non_reasoning_content,
+    think_start_token="<think:opensource>",
+    think_end_token="</think:opensource>",
+)
+```
+
+Set this dictionary as the model configuration's `pred_postprocessor`. Retain
+unfinished responses in the evaluation denominator and check that they contain
+a completed final answer; an option mentioned during unfinished reasoning is
+not a final answer.
+
 Refer to [Using AISBench](../../developer_guide/evaluation/using_ais_bench.md) for details.
 
 ## 8 Performance Evaluation

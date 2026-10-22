@@ -2085,6 +2085,12 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
         # Increment the sequence lengths.
         if advance_draft_positions:
             common_attn_metadata.seq_lens[:batch_size] += 1
+            common_attn_metadata.max_seq_len = min(common_attn_metadata.max_seq_len + 1, self.max_model_len)
+            upper_bound = getattr(common_attn_metadata, "seq_lens_cpu_upper_bound", None)
+            if upper_bound is not None:
+                # Keep each merged step's host bound independent, like its
+                # device lengths, without synchronizing rejection counts.
+                common_attn_metadata.seq_lens_cpu_upper_bound = upper_bound + 1
         # For the requests that exceed the max model length, we set the
         # sequence length to 1 to minimize their overheads in attention.
         exceeds_mask = common_attn_metadata.seq_lens[:batch_size] > self.max_model_len
@@ -2398,7 +2404,7 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
             attn_state=self.runner.attn_state,
             decode_token_per_req=self.runner.decode_token_per_req,
             is_prefilling=common_attn_metadata.is_prefilling,
-            max_seq_len=0,
+            max_seq_len=new_seq_lens_cpu.max().item(),
             req_topk_buffer_slots=common_attn_metadata.req_topk_buffer_slots,
             req_topk_buffer_active=common_attn_metadata.req_topk_buffer_active,
             offload_dummy=common_attn_metadata.offload_dummy,
@@ -2496,7 +2502,7 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
             _num_computed_tokens_cpu=common_attn_metadata._num_computed_tokens_cpu,
             seq_lens=common_attn_metadata.seq_lens,
             is_prefilling=common_attn_metadata.is_prefilling,
-            max_seq_len=0,
+            max_seq_len=common_attn_metadata.max_seq_len,
             req_topk_buffer_slots=common_attn_metadata.req_topk_buffer_slots,
             req_topk_buffer_active=common_attn_metadata.req_topk_buffer_active,
             offload_dummy=common_attn_metadata.offload_dummy,

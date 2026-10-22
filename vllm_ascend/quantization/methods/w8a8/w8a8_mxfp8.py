@@ -340,6 +340,7 @@ class AscendW8A8MXFP8DynamicFusedMoEMethod(AscendMoEScheme):
         quant_description = getattr(vllm_config.quant_config, "quant_description", None) or {}
         self.group_size = quant_description.get("group_size", 32)
         ascend_config = get_ascend_config()
+        self.dynamic_mx_quant_scale_alg = get_dynamic_mx_quant_scale_alg(vllm_config)
         self.dynamic_eplb = False if vllm_config.use_v2_model_runner else ascend_config.eplb_config.dynamic_eplb
         self.use_expert_weight_list = self.dynamic_eplb or (
             vllm_config.use_v2_model_runner is True and vllm_config.parallel_config.enable_eplb is True
@@ -398,6 +399,9 @@ class AscendW8A8MXFP8DynamicFusedMoEMethod(AscendMoEScheme):
                 apply_router_weight_on_input=layer.apply_router_weight_on_input,
                 pertoken_scale=layer.ascend_pertoken_scale,
                 activation=layer.activation,
+                # Dispatch fusion uses the fixed MX exponent rule. Keep
+                # BF16 communication when the model needs ceil scaling.
+                comm_quant_mode=0 if self.dynamic_mx_quant_scale_alg == 1 else None,
                 mxfp_act_quant_type=torch.float8_e4m3fn,
                 mxfp_weight_quant_type=torch.float8_e4m3fn,
                 mxfp_scale_dtype=torch_npu.float8_e8m0fnu,
@@ -480,7 +484,7 @@ class AscendW8A8MXFP8DynamicFusedMoEMethod(AscendMoEScheme):
                 "w2_weight_scale": tuple(layer.w2_weight_scale.data.shape),
             }
 
-        use_mega_moe = use_cann_megamoe(get_current_vllm_config())
+        use_mega_moe = self.dynamic_mx_quant_scale_alg == 0 and use_cann_megamoe(get_current_vllm_config())
         if not self.use_expert_weight_list and not use_mega_moe:
             if not hasattr(layer, "_mxfp8_moe_buffers"):
                 layer._mxfp8_moe_buffers = {}
@@ -666,6 +670,16 @@ class AscendW8A8MXFP8DynamicFusedMoEMethod(AscendMoEScheme):
         return [getattr(layer, name)]
 
     def apply_gmm1_act_quant(self, mlp_compute_input: MoEMlpComputeInput):
+        if mlp_compute_input.swiglu_limit > 0 or self.dynamic_mx_quant_scale_alg == 1:
+            # The fused operator supports neither clipping nor ceil MX scales.
+            hidden_states = self.apply_gmm1(mlp_compute_input)
+            if mlp_compute_input.swiglu_limit > 0:
+                gate, up = hidden_states.chunk(2, dim=-1)
+                gate.clamp_(max=mlp_compute_input.swiglu_limit)
+                up.clamp_(min=-mlp_compute_input.swiglu_limit, max=mlp_compute_input.swiglu_limit)
+            hidden_states = torch_npu.npu_swiglu(hidden_states)
+            return self.apply_act_quant(mlp_compute_input, hidden_states)
+
         hidden_states = mlp_compute_input.hidden_states
         hidden_states, pertoken_scale = self._quant_hidden_states(hidden_states, mlp_compute_input.dynamic_scale)
         layer = mlp_compute_input.layer

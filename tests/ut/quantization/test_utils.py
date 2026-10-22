@@ -43,6 +43,20 @@ class TestDynamicMxQuantScaleAlg(TestBase):
         mock_profile.return_value = get_hardware_profile(AscendDeviceType.A3)
         self.assertEqual(get_dynamic_mx_quant_scale_alg(minimax_config), 0)
 
+    @patch("vllm_ascend.quantization.utils.get_current_hardware_profile")
+    def test_hy4_uses_gpu_ceil_scaling_for_text_vision_and_draft(self, mock_profile):
+        configs = [
+            self._config("HYV4ForCausalLM"),
+            self._config("HYV4VLForConditionalGeneration"),
+            self._config("HYV4MTP"),
+            self._config(None, model_type="hy_v4"),
+            self._config(None, model_type="hy_v4_vl"),
+        ]
+        for device, expected in [(AscendDeviceType.A5, 1), (AscendDeviceType.A3, 0)]:
+            mock_profile.return_value = get_hardware_profile(device)
+            for config in configs:
+                self.assertEqual(get_dynamic_mx_quant_scale_alg(config), expected)
+
     @patch(
         "vllm_ascend.quantization.utils.get_current_hardware_profile",
         return_value=get_hardware_profile(AscendDeviceType.A5),
