@@ -342,6 +342,28 @@ Refer to [Using AISBench](../../developer_guide/evaluation/using_ais_bench.md) f
 
 ## 8 Performance Evaluation
 
+On A5, small HY4 iHC batches use fused Triton pre/post kernels. The supported
+inputs are contiguous BF16 tensors with hidden size 6144, four iHC channels,
+and at most 256 tokens. Other shapes, dtypes, hardware families, and batch
+invariant mode keep the native implementation. Larger prefill batches also
+keep the native implementation.
+
+The kernels retain FP32 accumulation and do not change the MXFP8 ceil-scale
+or SwiGLU clamp rules. Floating-point reduction order differs from native
+matrix multiplication, so outputs are numerically close rather than bitwise
+identical. Check model-level accuracy when changing kernels or compiler versions.
+
+For an operator benchmark on an idle A5 device:
+
+```bash
+python tools/hy4/benchmark_ihc.py --batch-sizes 1 8 16 --repeats 100
+```
+
+This reports native and fused pre/post latency in NPU graphs. For service
+measurements, retain the same input data, MTP settings, concurrency, and prefix
+cache state. AISBench ITL measures stream-event intervals; MTP events can carry
+multiple tokens, so record TPOT and acceptance statistics alongside ITL.
+
 Refer to [Using AISBench for performance evaluation](../../developer_guide/evaluation/using_ais_bench.md#execute-performance-evaluation) for details.
 
 Refer to [vllm benchmark](https://docs.vllm.ai/en/latest/benchmarking/) for more details.

@@ -15,21 +15,59 @@ from types import SimpleNamespace
 import torch
 from torch import nn
 from vllm.config import get_current_vllm_config
+from vllm.model_executor.layers.linear import ReplicatedLinear
 from vllm.model_executor.layers.mla import MLAModules, MultiHeadLatentAttentionWrapper
 from vllm.model_executor.layers.quantization.fp8 import Fp8Config
 from vllm.model_executor.layers.quantization.kv_cache import KVCacheScaleParameter
 from vllm.model_executor.models.utils import get_pp_missing_layer_names
 from vllm.models.hy_v4.nvidia import attention as hy_attention
+from vllm.models.hy_v4.nvidia import hc as hy_hc
 from vllm.models.hy_v4.nvidia import model as hy_model
 from vllm.models.hy_v4.nvidia import mtp as hy_mtp
 
 from vllm_ascend.attention.sfa_v1 import AscendSFABackend
+from vllm_ascend.ops.triton.hy4_ihc import triton_ihc_post, triton_ihc_pre, triton_ihc_supported
 from vllm_ascend.quantization.configs.fp8_config import AscendFp8Config
 from vllm_ascend.quantization.configs.modelslim_config import AscendModelSlimConfig
 
 _HYV4_MTP_LOAD_WEIGHTS = hy_mtp.HYV4MTP.load_weights
 _HYV4_CREATE_MTP_QUANT_CONFIG = hy_mtp._create_mtp_quant_config
 _HYV4_MTP_FORWARD = hy_mtp.HYV4MultiTokenPredictor.forward
+_HYV4_HC_PRE_FORWARD = getattr(hy_hc.HYV4HCPreLayer.forward, "__wrapped__", hy_hc.HYV4HCPreLayer.forward)
+_HYV4_HC_POST_FORWARD = getattr(hy_hc.HYV4HCPostLayer.forward, "__wrapped__", hy_hc.HYV4HCPostLayer.forward)
+_HYV4_IHC_CHANNELS = 4
+
+
+@wraps(_HYV4_HC_PRE_FORWARD)
+def _hc_pre_forward(self, x):
+    if (
+        self.hpc_op is None
+        and isinstance(self.hc_fn, ReplicatedLinear)
+        and not self.hc_fn._forward_pre_hooks
+        and not self.hc_fn._forward_hooks
+        and triton_ihc_supported(x)
+    ):
+        parameters = (self.hc_fn.weight, self.hc_scale, self.hc_base)
+        if all(value.device == x.device and value.dtype == torch.float32 for value in parameters):
+            return triton_ihc_pre(x, *parameters, self.magnitude, self.hc_eps, self.layernorm_epsilon)
+    # Native projection hooks must still run when weights are offloaded.
+    return _HYV4_HC_PRE_FORWARD(self, x)
+
+
+@wraps(_HYV4_HC_POST_FORWARD)
+def _hc_post_forward(self, x, residual, post):
+    if (
+        self.hpc_op is None
+        and triton_ihc_supported(x)
+        and residual.ndim == 3
+        and residual.shape[1] == _HYV4_IHC_CHANNELS
+        and residual.device == x.device
+        and residual.dtype == x.dtype
+        and post.device == x.device
+        and post.dtype == torch.float32
+    ):
+        return triton_ihc_post(x, residual, post)
+    return _HYV4_HC_POST_FORWARD(self, x, residual, post)
 
 
 @wraps(_HYV4_MTP_FORWARD)
@@ -233,3 +271,8 @@ hy_mtp._create_mtp_quant_config = _create_mtp_quant_config
 hy_mtp._prepare_mtp_fp8_expert_scale = _prepare_mtp_fp8_expert_scale
 hy_mtp.HYV4MTP.load_weights = _load_mtp_weights
 hy_mtp.HYV4MultiTokenPredictor.forward = _mtp_forward
+
+
+# Retain native dispatch, including projection hooks, for unsupported inputs.
+hy_hc.HYV4HCPreLayer.forward = _hc_pre_forward
+hy_hc.HYV4HCPostLayer.forward = _hc_post_forward
