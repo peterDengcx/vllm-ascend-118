@@ -29,3 +29,16 @@ def test_sink_clears_empty_rows_with_unwritten_output():
     actual = apply_attention_sink(output, maximum, denominator, torch.zeros(3))
     assert actual.dtype == output.dtype
     torch.testing.assert_close(actual, torch.zeros_like(output))
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+def test_sink_keeps_float32_scale_until_final_output_cast(dtype):
+    # One ordinary key has score 0 and these exactly representable values.
+    # The extra sink has score 0.7 and zero value, so direct attention is an
+    # independent reference without a pre-rounded normalization factor.
+    values = torch.tensor([-2.453125, -2.40625, 2.359375, 3.125], dtype=dtype).view(1, 1, -1)
+    sink = torch.tensor([0.7])
+    scores = torch.tensor([0.0, 0.7])
+    expected = (scores.softmax(0)[0] * values.float()).to(dtype)
+    actual = apply_attention_sink(values, torch.zeros(1, 1), torch.ones(1, 1), sink)
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)

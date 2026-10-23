@@ -16,4 +16,7 @@ def apply_attention_sink(
     denominator = softmax_sum.float().reshape(num_tokens, num_heads)
     logsumexp = maximum + denominator.clamp_min(torch.finfo(torch.float32).tiny).log()
     factor = torch.sigmoid(logsumexp - sink.float().view(1, num_heads))
-    return torch.where((denominator > 0).unsqueeze(-1), output * factor.unsqueeze(-1).to(output.dtype), 0)
+    # GPU sink attention scales its FP32 accumulator before the output cast.
+    # Casting the factor first introduces an additional BF16/FP16 rounding.
+    scaled = output.float() * factor.unsqueeze(-1)
+    return torch.where((denominator > 0).unsqueeze(-1), scaled, 0).to(output.dtype)
