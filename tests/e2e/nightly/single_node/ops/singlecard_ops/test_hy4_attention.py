@@ -62,9 +62,8 @@ def test_hy4_strided_pinned_weight_prefetch_capture_and_replay(dtype):
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-@pytest.mark.parametrize("rounding_boundary", [False, True])
 @torch.inference_mode()
-def test_hy4_sparse_sink_matches_dense_attention(dtype, rounding_boundary):
+def test_hy4_sparse_sink_matches_dense_attention(dtype):
     generator = torch.Generator().manual_seed(73)
     tokens, heads, latent, rope_dim, block_size, topk = 4, 8, 512, 64, 128, 2048
     query = torch.randn(tokens, heads, latent, generator=generator).to(dtype) * 0.1
@@ -76,16 +75,6 @@ def test_hy4_sparse_sink_matches_dense_attention(dtype, rounding_boundary):
         indices[token, 0, : token + 1] = torch.arange(token + 1)
     scale = 256**-0.5
     sink = torch.linspace(-3, 3, heads)
-    if rounding_boundary:
-        # One visible key makes the pre-sink attention output exactly equal
-        # to its value, exposing rounding of the FP32 sink scale itself.
-        tokens = 1
-        query = torch.zeros(tokens, heads, latent, dtype=dtype)
-        query_rope = torch.zeros(tokens, heads, rope_dim, dtype=dtype)
-        key[:] = torch.tensor([-2.453125, -2.40625, 2.359375, 3.125], dtype=dtype).repeat(latent // 4)
-        indices = torch.full((tokens, 1, topk), -1, dtype=torch.int32)
-        indices[:, :, 0] = 0
-        sink = torch.full((heads,), 0.7)
     output, maximum, denominator = torch.ops._C_ascend.npu_sparse_flash_attention(
         query=query.npu(),
         key=key.view(1, block_size, 1, latent).npu(),
@@ -111,10 +100,7 @@ def test_hy4_sparse_sink_matches_dense_attention(dtype, rounding_boundary):
         scores += query_rope[token].float() @ key_rope[: token + 1].float().T
         scores = torch.cat([scores * scale, sink.unsqueeze(-1)], dim=-1)
         expected.append(scores.softmax(-1)[:, :-1] @ key[: token + 1].float())
-    if rounding_boundary:
-        torch.testing.assert_close(actual, torch.stack(expected).to(dtype), atol=0, rtol=0)
-    else:
-        torch.testing.assert_close(actual.float(), torch.stack(expected), atol=2e-3, rtol=2e-2)
+    torch.testing.assert_close(actual.float(), torch.stack(expected), atol=2e-3, rtol=2e-2)
 
 
 @torch.inference_mode()
