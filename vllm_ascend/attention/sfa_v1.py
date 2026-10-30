@@ -1027,6 +1027,12 @@ class AscendSFAImpl(MLAAttentionImpl):
         quant_method = self._get_layer_quant_method(self.fused_qkv_a_proj)
         qt = type(quant_method) if quant_method is not None else None
 
+        # BF16 HY4 attention must use the same preprocessing on P, D and
+        # non-PD workers. KV role alone must not select a different kernel.
+        hf_config = self.vllm_config.model_config.hf_config
+        if qt is None and getattr(hf_config, "model_type", None) in ("hy_v4", "hy_v4_vl"):
+            return None
+
         # PROLOG_V3 takes precedence over MLAPO and is the default fused
         # preprocessing for quantized SFA layers in every deployment (plain
         # serving, PD KV producers and KV consumers). ``enable_dsa_cp`` is the
