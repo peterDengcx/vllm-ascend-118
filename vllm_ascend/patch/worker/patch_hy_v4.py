@@ -28,6 +28,7 @@ from vllm_ascend.quantization.configs.fp8_config import AscendFp8Config
 from vllm_ascend.quantization.configs.modelslim_config import AscendModelSlimConfig
 
 _HYV4_MTP_LOAD_WEIGHTS = hy_mtp.HYV4MTP.load_weights
+_HYV4_LOAD_WEIGHTS = hy_model.HYV4ForCausalLM.load_weights
 _HYV4_CREATE_MTP_QUANT_CONFIG = hy_mtp._create_mtp_quant_config
 _HYV4_MTP_FORWARD = hy_mtp.HYV4MultiTokenPredictor.forward
 
@@ -102,6 +103,33 @@ def _prepare_mtp_fp8_expert_scale(quant_config, name, loaded_weight):
             elif ".mlp.experts." not in name:
                 loaded_weight = loaded_weight.view(torch.float8_e8m0fnu).float()
     return name, loaded_weight
+
+
+@wraps(_HYV4_LOAD_WEIGHTS)
+def _load_hy4_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+    from vllm_ascend.patch.hy4_vl.fp4 import Hy4Fp4Config
+
+    if not isinstance(self.quant_config, Hy4Fp4Config):
+        return _HYV4_LOAD_WEIGHTS(self, weights)
+    # The mixed FP4 export also stores block-FP8 backbone projections with
+    # `.scale` names and raw E8M0 bytes, just like its MTP projections.
+    normalized = (_prepare_mtp_fp8_expert_scale(self.quant_config, name, weight) for name, weight in weights)
+    return _HYV4_LOAD_WEIGHTS(self, normalized)
+
+
+def _check_hy4_fp4_scales(model, loaded: set[str]) -> None:
+    """Check only after the owning model has consumed its entire weight stream."""
+    from vllm_ascend.patch.hy4_vl.fp4 import Hy4Fp4Config
+
+    if not isinstance(getattr(model, "quant_config", None), Hy4Fp4Config):
+        return
+    missing_scales = sorted(
+        name
+        for name, param in model.named_parameters()
+        if "weight_scale" in name and name not in loaded and not isinstance(param, KVCacheScaleParameter)
+    )
+    if missing_scales:
+        raise ValueError("Missing HY4 FP4 backbone checkpoint weight scales: " + ", ".join(missing_scales))
 
 
 def _checked_mtp_weights(model, weights):
@@ -247,6 +275,7 @@ hy_attention.MLAAttention = _defer_mla_initialization
 hy_attention.HYV4MLAAttention = AscendHYV4MLAAttention
 hy_model.HYV4MLAAttention = AscendHYV4MLAAttention
 hy_model.HYV4ForCausalLM.__init__ = _isolate_hy4_fp4_init(hy_model.HYV4ForCausalLM.__init__)
+hy_model.HYV4ForCausalLM.load_weights = _load_hy4_weights
 hy_mtp.HYV4MTP.__init__ = _isolate_hy4_fp4_init(hy_mtp.HYV4MTP.__init__)
 hy_mtp._create_mtp_quant_config = _create_mtp_quant_config
 hy_mtp._prepare_mtp_fp8_expert_scale = _prepare_mtp_fp8_expert_scale

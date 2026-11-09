@@ -39,6 +39,7 @@ from vllm_ascend.patch.hy4_vl.processor import (
 )
 from vllm_ascend.patch.hy4_vl.random_weights import initialize_missing_vision_weights
 from vllm_ascend.patch.hy4_vl.vision import HYV4VisionTransformer
+from vllm_ascend.patch.worker.patch_hy_v4 import _check_hy4_fp4_scales
 
 
 class HYV4VLImagePixelInputs(TensorSchema):
@@ -253,6 +254,10 @@ class HYV4VLForConditionalGeneration(
             ignore_unexpected_prefixes=["visual."] if self.visual is None else None,
         )
         loaded = loader.load_weights(weights, mapper=self.hf_to_vllm_mapper)
+        _check_hy4_fp4_scales(
+            self.language_model,
+            {name.removeprefix("language_model.") for name in loaded if name.startswith("language_model.")},
+        )
         if self.visual is not None:
             initialized = initialize_missing_vision_weights(
                 self.visual,
