@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import torch
 from torch import nn
-from vllm.config import get_current_vllm_config
+from vllm.config import get_current_vllm_config, set_current_vllm_config
 from vllm.model_executor.layers.mla import MLAModules, MultiHeadLatentAttentionWrapper
 from vllm.model_executor.layers.quantization.fp8 import Fp8Config
 from vllm.model_executor.layers.quantization.kv_cache import KVCacheScaleParameter
@@ -30,6 +30,23 @@ from vllm_ascend.quantization.configs.modelslim_config import AscendModelSlimCon
 _HYV4_MTP_LOAD_WEIGHTS = hy_mtp.HYV4MTP.load_weights
 _HYV4_CREATE_MTP_QUANT_CONFIG = hy_mtp._create_mtp_quant_config
 _HYV4_MTP_FORWARD = hy_mtp.HYV4MultiTokenPredictor.forward
+
+
+def _isolate_hy4_fp4_init(original_init):
+    @wraps(original_init)
+    def init(self, *, vllm_config, prefix=""):
+        quant_config = vllm_config.quant_config
+        # FP8, ModelOpt and ModelSlim retain their exact config object and
+        # constructor path. Only a HY4 constructor can enter the FP4 adapter.
+        if type(quant_config) is not AscendFp8Config or quant_config.store_dtype not in ("mxfp4", "fp4"):
+            return original_init(self, vllm_config=vllm_config, prefix=prefix)
+        from vllm_ascend.patch.hy4_vl.fp4 import prepare_hy4_fp4_config
+
+        local_config = prepare_hy4_fp4_config(vllm_config)
+        with set_current_vllm_config(local_config):
+            return original_init(self, vllm_config=local_config, prefix=prefix)
+
+    return init
 
 
 @wraps(_HYV4_MTP_FORWARD)
@@ -229,6 +246,8 @@ hy_attention.Indexer = AscendHYV4Indexer
 hy_attention.MLAAttention = _defer_mla_initialization
 hy_attention.HYV4MLAAttention = AscendHYV4MLAAttention
 hy_model.HYV4MLAAttention = AscendHYV4MLAAttention
+hy_model.HYV4ForCausalLM.__init__ = _isolate_hy4_fp4_init(hy_model.HYV4ForCausalLM.__init__)
+hy_mtp.HYV4MTP.__init__ = _isolate_hy4_fp4_init(hy_mtp.HYV4MTP.__init__)
 hy_mtp._create_mtp_quant_config = _create_mtp_quant_config
 hy_mtp._prepare_mtp_fp8_expert_scale = _prepare_mtp_fp8_expert_scale
 hy_mtp.HYV4MTP.load_weights = _load_mtp_weights
