@@ -1029,8 +1029,25 @@ def is_moe_model(vllm_config: VllmConfig):
     return _IS_MOE_MODEL
 
 
+def is_hy4_dense_drafter(vllm_config: VllmConfig) -> bool:
+    """Recognize the derived dense DFly config, not inherited expert fields."""
+    spec = vllm_config.speculative_config
+    draft = getattr(spec, "draft_model_config", None)
+    config = getattr(draft, "hf_text_config", None)
+    return (
+        getattr(config, "ascend_dfly", False)
+        and "HYV4DFlyModel" in (getattr(config, "architectures", None) or ())
+        and getattr(config, "mlp_type", None) == "dense"
+        and bool(getattr(config, "mlp_layer_types", None))
+        and all(kind == "dense" for kind in config.mlp_layer_types)
+    )
+
+
 def is_drafter_moe_model(vllm_config: VllmConfig):
     """Checks if the drafter model is a MoE model by config"""
+    # Check before the cache: target-derived expert keys do not describe DFly.
+    if is_hy4_dense_drafter(vllm_config):
+        return False
     global _IS_DRAFTER_MOE_MODEL
     if _IS_DRAFTER_MOE_MODEL is None:
         speculative_config = vllm_config.speculative_config
@@ -1321,6 +1338,21 @@ def should_skip_allreduce_across_dp_group(vllm_config: VllmConfig, is_draft_mode
     this is cheap and avoids id-reuse / stale-cache / init-ordering hazards.
     """
     ascend_config = get_ascend_config()
+    if is_draft_model and is_hy4_dense_drafter(vllm_config):
+        # DFly is TP-local, including its target KV aliases. Target MoE
+        # hierarchy/mega-MoE policies must not add draft DP collectives.
+        # Shared fine-grained TP operators may span DP ranks; retain their
+        # synchronization and uniform padding conservatively when enabled.
+        finegrained_tp = ascend_config.finegrained_tp_config
+        return not any(
+            size > 0
+            for size in (
+                finegrained_tp.oproj_tensor_parallel_size,
+                finegrained_tp.lmhead_tensor_parallel_size,
+                finegrained_tp.embedding_tensor_parallel_size,
+                finegrained_tp.mlp_tensor_parallel_size,
+            )
+        )
     # 1. When mc2_comm_alg == "hierarchy", dispatch/combine op don't support dynamic bs;
     # 2. When use mega_moe, op don't support dynamic global_bs;
     # we need to do allreduce and pad token across dp every step.

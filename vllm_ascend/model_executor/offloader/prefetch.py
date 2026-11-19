@@ -272,6 +272,22 @@ class _ModuleOffloader(VllmModuleOffloader):
         for offloader in self._param_offloaders.values():
             setattr(offloader._param, _ASCEND_PREFETCH_PARAMETER_ATTR, True)
 
+    def sync_cpu_storage(self):
+        # Ascend SFA disposes absorbed projections by replacing their storage
+        # with an empty tensor, while retaining the nn.Parameter. Empty host
+        # allocations cannot be pinned and must not enter the prefetch pool.
+        disposed = []
+        for name, offloader in self._param_offloaders.items():
+            try:
+                if offloader._param.numel() == 0:
+                    disposed.append(name)
+            except AttributeError:
+                # Upstream handles parameters deleted by quantizers.
+                continue
+        for name in disposed:
+            del self._param_offloaders[name]
+        super().sync_cpu_storage()
+
     def _copy_param_to_static(self, cpu_storage: torch.Tensor, gpu_buffer: torch.Tensor) -> None:
         # NPU copy_ of a transposed CPU tensor otherwise creates a pageable
         # contiguous temporary. A raw-storage view preserves pinned DMA and
@@ -315,7 +331,12 @@ class _ModuleOffloader(VllmModuleOffloader):
         and set a mark to param if its weights is in NZ format.
         """
         for param_offloader in self._param_offloaders.values():
-            param = param_offloader._param
+            try:
+                param = param_offloader._param
+            except AttributeError:
+                # Quantizers may delete transient scale parameters. Upstream
+                # sync_cpu_storage prunes these after all quantizers finish.
+                continue
             if _is_using_nz_weight(param):
                 mark_prefetch_offload_nz_weight(param)
 

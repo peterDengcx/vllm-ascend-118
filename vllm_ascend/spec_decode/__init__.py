@@ -59,6 +59,9 @@ def get_spec_decode_method(method, vllm_config, device, runner):
             return AscendMultiKVCacheGroupMTPProposer(vllm_config, device, runner)
         return AscendEagleProposer(vllm_config, device, runner)
     elif method == "dflash":
+        if getattr(vllm_config.speculative_config.draft_model_config.hf_config, "ascend_dfly", False):
+            from vllm_ascend.spec_decode.hy4_dfly_proposer import AscendHY4DFlyProposer
+            return AscendHY4DFlyProposer(vllm_config, device, runner)
         if is_dflash2_draft(vllm_config.speculative_config):
             return AscendDflash2Proposer(vllm_config, device, runner)
         return AscendDflashProposer(vllm_config, device, runner)

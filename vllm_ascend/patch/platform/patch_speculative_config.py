@@ -84,6 +84,11 @@ def _normalize_kimi_dflash_rope(hf_config: PretrainedConfig) -> None:
 
 
 def _normalize_legacy_qwen3_dspark_config(hf_config: PretrainedConfig) -> PretrainedConfig:
+    if hf_config.model_type in ("hy_v4", "hy_v4_vl"):
+        text = getattr(hf_config, "text_config", hf_config)
+        if getattr(text, "num_nextn_predict_layers", 0) == 0 and getattr(hf_config, "dfly_num_hidden_layers", 0) > 0:
+            from vllm_ascend.patch.hy4_dfly.config import _derive_dfly_config
+            return _derive_dfly_config(hf_config, target_config=hf_config)
     if hf_config.model_type == "hy_v4_vl":
         hf_config = hf_config.text_config
     hf_config = _orig_hf_config_override(hf_config)
@@ -195,9 +200,49 @@ def _temporarily_disable_dspark_dcp(self: SpeculativeConfig):
 
 
 def _dspark_post_init(self):
+    target = getattr(self, "target_model_config", None)
+    hf = getattr(target, "hf_config", None)
+    text = getattr(hf, "text_config", hf)
+    use_dfly = (
+        self.method in ("mtp", "dfly")
+        and getattr(text, "model_type", None) == "hy_v4"
+        and getattr(text, "num_nextn_predict_layers", 0) == 0
+        and getattr(hf, "dfly_num_hidden_layers", 0) > 0
+    )
+    if use_dfly:
+        from vllm_ascend.patch.hy4_dfly.config import _validate_block_fp8_config
+        _validate_block_fp8_config(target.model_arch_config.quantization_config)
+        if self.model is not None and self.model != target.model:
+            raise ValueError("HY4 DFly weights must be in the target checkpoint")
+        if self.kv_cache_dtype not in (None, "auto", "bfloat16"):
+            raise ValueError("Ascend HY4 DFly currently requires BF16 MLA KV cache")
+        from vllm_ascend.patch.hy4_dfly.parallel import validate_dfly_parallel
+
+        validate_dfly_parallel(self)
+        if self.enable_adaptive_verification or self.rejection_sample_method != "standard":
+            raise ValueError("HY4 DFly requires standard non-adaptive target verification")
+        if self.draft_sample_method not in ("greedy", "probabilistic"):
+            raise ValueError("Unsupported HY4 DFly draft sampling method")
+        # Use the pinned vLLM MTP config bootstrap, then select the NPU block proposer.
+        self.method = "mtp"
+        if self.num_speculative_tokens is None:
+            self.num_speculative_tokens = hf.dfly_block_size - 1
+        if not 1 <= self.num_speculative_tokens <= 16:
+            raise ValueError("HY4 DFly requires 1..16 speculative tokens")
+
     # TODO: This block can be deleted after the upstream supports the overlay of mla dcp and dspark
     with _temporarily_disable_dspark_dcp(self):
         _orig_post_init(self)
+    if use_dfly:
+        from vllm_ascend.patch.hy4_dfly.parallel import inherit_dfly_parallel
+
+        inherit_dfly_parallel(self)
+        speculative_config.logger.info("Using Ascend HY4 DFly block drafting for this checkpoint's dfly_layers weights")
+        self.method = "dflash"
+        self.parallel_drafting = True
+        self.draft_model_config.hf_config.dflash_config = {
+            "mask_token_id": hf.dfly_mask_token_id,
+        }
     if self.use_dspark():
         draft_model_config = getattr(self, "draft_model_config", None)
         draft_hf_config = getattr(draft_model_config, "hf_config", None)

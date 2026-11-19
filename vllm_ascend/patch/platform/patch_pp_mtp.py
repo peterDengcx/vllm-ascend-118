@@ -310,7 +310,7 @@ def _patch_model_config_validation() -> None:
             arch in {"DSparkDraftModel", "K3DSparkModel", "Qwen3DSparkModel"} for arch in architectures
         )
         if (
-            getattr(self, "runner", None) == "draft"
+            (getattr(self, "runner_type", None) == "draft" or getattr(self, "runner", None) == "draft")
             and (is_eagle_drafter or is_mtp_drafter or is_dspark_drafter)
             and getattr(parallel_config, "pipeline_parallel_size", 1) > 1
         ):
@@ -321,8 +321,9 @@ def _patch_model_config_validation() -> None:
                 "Validating local speculative drafter with pipeline_parallel_size=1 "
                 "because it is loaded locally on the last pipeline stage."
             )
-            patched_config = copy.copy(parallel_config)
-            patched_config.pipeline_parallel_size = 1
+            from vllm_ascend.patch.worker.mtp_pipeline import local_mtp_parallel_config
+
+            patched_config = local_mtp_parallel_config(parallel_config)
             return original_verify(self, patched_config)
         return original_verify(self, parallel_config)
 

@@ -187,6 +187,7 @@ from vllm_ascend.ops.triton.spec_decode.ngram import triton_ngram_spec_decode
 from vllm_ascend.quantization.utils import enable_fa_quant
 from vllm_ascend.sample.sampler import AscendSampler
 from vllm_ascend.spec_decode import get_spec_decode_method
+from vllm_ascend.patch.hy4_dfly.bootstrap import dfly_runner_bootstrap
 from vllm_ascend.spec_decode.dflash_proposer import AscendDflashProposer
 from vllm_ascend.spec_decode.draft_proposer import AscendDraftModelProposer
 from vllm_ascend.spec_decode.dspark_proposer import AscendDSparkProposer
@@ -383,7 +384,7 @@ class NPUModelRunner(GPUModelRunner):
             hf_config is not None and hasattr(hf_config, "compress_ratios")
         )
 
-        with _torch_cuda_wrapper():
+        with _torch_cuda_wrapper(), dfly_runner_bootstrap(vllm_config):
             super().__init__(vllm_config, device)
         self.lookback_token_ids: CpuGpuBuffer | None = None
 
@@ -751,6 +752,10 @@ class NPUModelRunner(GPUModelRunner):
             self.decode_token_per_req = 1 + spec_token_num
             if get_pp_group().is_last_rank:
                 self.drafter = self._get_drafter()
+                if getattr(self.drafter, "uses_hidden_correction", False):
+                    # DFly fuses the final target hidden state at its anchor;
+                    # it does not concatenate intermediate DFlash features.
+                    self.use_aux_hidden_state_outputs = False
                 if self.speculative_config.method == "eagle3":
                     assert isinstance(self.drafter, AscendEagleProposer)
                     self.use_aux_hidden_state_outputs = self.drafter.eagle3_use_aux_hidden_state
@@ -4810,7 +4815,8 @@ class NPUModelRunner(GPUModelRunner):
             group_spec = group_kv_cache_spec.kv_cache_spec
             for layer_name in group_kv_cache_spec.layer_names:
                 if isinstance(group_spec, UniformTypeKVCacheSpecs):
-                    layer_kv_cache_spec[layer_name] = group_spec.kv_cache_specs[layer_name]
+                    cache_owner = self.shared_kv_cache_layers.get(layer_name, layer_name)
+                    layer_kv_cache_spec[layer_name] = group_spec.kv_cache_specs[cache_owner]
                 else:
                     layer_kv_cache_spec[layer_name] = group_spec
                 if static_forward_context is not None:
@@ -6217,7 +6223,10 @@ class NPUModelRunner(GPUModelRunner):
                 layer = layers[layer_name]
                 layer_kv_cache_spec = kv_cache_group_spec.kv_cache_spec
                 if isinstance(layer_kv_cache_spec, UniformTypeKVCacheSpecs):
-                    layer_kv_cache_spec = layer_kv_cache_spec.kv_cache_specs[layer_name]
+                    # Shared layers have no spec of their own; use the
+                    # cache owner's spec when selecting backend metadata.
+                    cache_owner = self.shared_kv_cache_layers.get(layer_name, layer_name)
+                    layer_kv_cache_spec = layer_kv_cache_spec.kv_cache_specs[cache_owner]
                 # Prefer the backend declared by the layer itself. Some
                 # indexer-cache layers require their own metadata builder.
                 attn_backend = layer.get_attn_backend()
@@ -6324,8 +6333,8 @@ class NPUModelRunner(GPUModelRunner):
         mamba_layers: dict[str, MambaBase] = {}
         attn_layer_names = set()
         for layer_name, attn_module in attn_layers.items():
-            if (isinstance(attn_module, Attention)
-                    and (kv_tgt_layer := attn_module.kv_sharing_target_layer_name) is not None):
+            if (isinstance(attn_module, (Attention, MLAAttention))
+                    and (kv_tgt_layer := getattr(attn_module, "kv_sharing_target_layer_name", None)) is not None):
                 # The layer doesn't need its own KV cache and will use that of
                 # the target layer. We skip creating a KVCacheSpec for it, so
                 # that KV cache management logic will act as this layer does

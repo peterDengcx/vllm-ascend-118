@@ -17,6 +17,8 @@
 #
 """LLM-Compressor (compressed_tensors) quantization configuration for Ascend."""
 
+import re
+
 from typing import Any, Optional, cast
 
 import torch
@@ -63,6 +65,21 @@ class AscendCompressedTensorsConfig(QuantizationConfig):
         # Map from [target -> scheme]
         self.target_scheme_map = target_scheme_map
         self.quant_description = config
+
+    def get_cache_scale_mapper(self):
+        mapper = QuantizationConfig.get_cache_scale_mapper()
+        # Block FP8 exports store dequantization multipliers as weight_scale;
+        # the native block scheme calls the same multipliers weight_scale_inv.
+        aliases = {}
+        for target, scheme in self.target_scheme_map.items():
+            if scheme is None:
+                continue
+            weight = scheme.get("weights")
+            if weight is None or weight.strategy != "block" or weight.type != QuantizationType.FLOAT:
+                continue
+            pattern = target[3:].removesuffix("$") if target.startswith("re:") else re.escape(target)
+            aliases[re.compile("(" + pattern + r")\.weight_scale$")] = r"\1.weight_scale_inv"
+        return mapper | WeightsMapper(orig_to_new_regex=aliases)
 
     def get_name(self) -> str:
         return COMPRESSED_TENSORS_METHOD
@@ -216,6 +233,7 @@ class AscendCompressedTensorsConfig(QuantizationConfig):
             input_quant=input_quant,
             format=format,
             layer_type="moe",
+            moe_config=layer.moe_config,
         )
         return cast(AscendMoEScheme, scheme)
 
@@ -296,6 +314,7 @@ class AscendCompressedTensorsConfig(QuantizationConfig):
         input_quant: Optional["QuantizationArgs"],
         format: str | None,
         layer_type: str,
+        moe_config=None,
     ) -> AscendLinearScheme | AscendMoEScheme:
         """Create the appropriate Ascend scheme based on quantization args and layer type.
 
@@ -312,6 +331,14 @@ class AscendCompressedTensorsConfig(QuantizationConfig):
 
         # Determine the quantization type
         quant_type = self._detect_quant_type(weight_quant, input_quant, format)
+
+        if quant_type == "FP8_BLOCK":
+            from ..methods.w8a8.fp8_block import AscendFp8BlockLinearMethod, AscendFp8BlockFusedMoEMethod
+
+            block_size = tuple(weight_quant.block_structure)
+            if layer_type == "linear":
+                return AscendFp8BlockLinearMethod(block_size)
+            return AscendFp8BlockFusedMoEMethod(block_size, moe_config)
 
         # Get the scheme class from registry
         scheme_cls = get_scheme_class(quant_type, layer_type)
@@ -342,6 +369,22 @@ class AscendCompressedTensorsConfig(QuantizationConfig):
         # use the per-layer format if defined, otherwise, use global format
         format = format if format is not None else self.quant_format
         act_quant_format = is_activation_quantization_format(format)
+
+        if (
+            format == "float-quantized"
+            and input_quant is not None
+            and weight_quant.type == input_quant.type == QuantizationType.FLOAT
+            and weight_quant.num_bits == input_quant.num_bits == 8
+            and weight_quant.strategy == "block"
+            and tuple(weight_quant.block_structure or ()) == (128, 128)
+            and input_quant.strategy == "group"
+            and input_quant.group_size == 128
+            and not weight_quant.dynamic
+            and input_quant.dynamic
+            and weight_quant.symmetric
+            and input_quant.symmetric
+        ):
+            return "FP8_BLOCK"
 
         # MXFP8: static FP8 group-wise weights + dynamic FP8 group-wise activations.
         if format == CompressionFormat.mxfp8_quantized.value and self._is_dynamic_group_mx(

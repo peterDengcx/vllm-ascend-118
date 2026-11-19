@@ -107,6 +107,8 @@ def _prepare_mtp_fp8_expert_scale(quant_config, name, loaded_weight):
 
 @wraps(_HYV4_LOAD_WEIGHTS)
 def _load_hy4_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+    # DFly owns these tensors; the target has no dfly_layers submodule.
+    weights = ((name, weight) for name, weight in weights if not name.startswith("model.dfly_layers."))
     from vllm_ascend.patch.hy4_vl.fp4 import Hy4Fp4Config
 
     if not isinstance(self.quant_config, Hy4Fp4Config):

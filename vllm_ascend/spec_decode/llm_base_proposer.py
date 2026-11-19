@@ -156,6 +156,13 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
                 self.speculative_config.draft_model_config,
                 self.speculative_config.draft_load_config,
             )
+        if self.method == "mtp" and self.vllm_config.parallel_config.pipeline_parallel_size > 1:
+            from vllm_ascend.patch.worker.mtp_pipeline import local_mtp_parallel_config
+
+            draft_vllm_config.parallel_config = local_mtp_parallel_config(
+                self.vllm_config.parallel_config,
+                self.speculative_config.draft_parallel_config.tensor_parallel_size,
+            )
         return draft_vllm_config
 
     @staticmethod
@@ -1066,7 +1073,7 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
         if token_indices_to_sample is None:
             token_indices_to_sample = common_attn_metadata.query_start_loc[1:] - 1
 
-        if self.method in ("eagle3", "dflash", "dspark"):
+        if self.method in ("eagle3", "dflash", "dspark") and not getattr(self, "uses_hidden_correction", False):
             model = self.model
             if isinstance(model, BreakableACLGraphWrapper):
                 model = model.unwrap()
@@ -1520,8 +1527,8 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
 
         num_indices = token_indices_to_sample.shape[0]
         if lmhead_tp_enable():
-            if self.method == "dspark":
-                # DSpark draft decoding runs outside ACLGraph. Its real LMHead
+            if self.method == "dspark" or getattr(self, "uses_hidden_correction", False):
+                # DSpark and HY4 DFly draft decoding run outside ACLGraph. Its real LMHead
                 # input is B * K; only pad it to the current target graph bucket.
                 num_indices = batch_size * self.num_speculative_tokens
                 token_indices_to_sample = token_indices_to_sample[:num_indices]
@@ -1545,7 +1552,7 @@ class AscendSpecDecodeBaseProposer(SpecDecodeBaseProposer):
         sample_hidden_states = last_hidden_states[token_indices_to_sample]
 
         draft_probs_step0: torch.Tensor | None = None
-        if getattr(self, "use_dflash2_selector", False):
+        if getattr(self, "use_dflash2_selector", False) or getattr(self, "uses_hidden_correction", False):
             # DFlash2 always drafts greedily (probabilistic is rejected in
             # its __init__), so draft_probs_step0 is always None here.
             draft_token_ids, draft_probs_step0 = self.compute_draft_token_ids(sample_hidden_states, sampling_metadata)

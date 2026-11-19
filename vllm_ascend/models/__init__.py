@@ -6,6 +6,10 @@ def register_model():
 
     register_hy4_vl_config()
     ModelRegistry.register_model(
+        "HYV4DFlyModel",
+        "vllm_ascend.patch.hy4_dfly.model:HYV4DFlyForCausalLM",
+    )
+    ModelRegistry.register_model(
         "HYV4VLForConditionalGeneration",
         "vllm_ascend.patch.hy4_vl.model:HYV4VLForConditionalGeneration",
     )
