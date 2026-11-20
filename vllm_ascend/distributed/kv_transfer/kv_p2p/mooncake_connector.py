@@ -553,7 +553,10 @@ class KVCacheRecvingThread(threading.Thread):
 
         self.num_draft_layers = 0
         if self.vllm_config.speculative_config is not None:
-            if self.vllm_config.speculative_config.method == "mtp":
+            draft_hf = self.vllm_config.speculative_config.draft_model_config.hf_config
+            if getattr(draft_hf, "ascend_dfly", False):
+                self.num_draft_layers = 0
+            elif self.vllm_config.speculative_config.method == "mtp":
                 # all MTP layer use the same kv cache layer, so only need to transfer once
                 self.num_draft_layers = 1
             elif (
@@ -2157,6 +2160,18 @@ class MooncakeConnectorWorker:
             )
         self.num_key_value_heads = self.vllm_config.model_config.hf_text_config.num_key_value_heads
 
+        # Shared attention layers (including HY4 DFly) have no physical
+        # cache of their own. Transfer only owners, preserving scheduler group
+        # IDs and the original runner config used by draft attention metadata.
+        context = vllm_config.compilation_config.static_forward_context
+        self._shared_kv_aliases = {
+            name for name, layer in context.items()
+            if getattr(layer, "kv_sharing_target_layer_name", None) is not None
+        }
+        kv_cache_config = copy.deepcopy(kv_cache_config)
+        for group in kv_cache_config.kv_cache_groups:
+            group.layer_names = [name for name in group.layer_names
+                                 if name not in self._shared_kv_aliases]
         # kv cache config
         self.kv_cache_config = kv_cache_config
         self.num_blocks: int = kv_cache_config.num_blocks
@@ -2621,6 +2636,8 @@ class MooncakeConnectorWorker:
 
         self.num_blocks = self.kv_cache_config.num_blocks
         logger.info("num_blocks: %s", self.num_blocks)
+        kv_caches = {name: cache for name, cache in kv_caches.items()
+                     if name not in self._shared_kv_aliases}
         self.kv_caches = kv_caches
         # Maps each KV cache group to its serialized group spec and physical
         # layer indices: {group_id: (group_spec, [layer_idx0, layer_idx1, ...])}.

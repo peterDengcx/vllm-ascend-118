@@ -54,3 +54,38 @@ def test_is_using_nz_weight_handles_invalid_npu_format(monkeypatch):
     )
 
     assert not _is_using_nz_weight(param)
+
+
+def test_pageable_prefetch_graph_rejected_before_capture(monkeypatch):
+    import pytest
+    from vllm_ascend.model_executor.offloader.prefetch import (
+        _raise_if_pageable_prefetch_incompatible_with_graph,
+    )
+
+    monkeypatch.setattr("vllm_ascend.model_executor.offloader.prefetch.should_pin_memory", lambda: False)
+    monkeypatch.setattr("vllm.config.get_current_vllm_config", lambda: SimpleNamespace(
+        model_config=SimpleNamespace(enforce_eager=False)))
+    with pytest.raises(RuntimeError, match="Pageable H2D copies cannot be captured"):
+        _raise_if_pageable_prefetch_incompatible_with_graph()
+
+
+def test_pageable_prefetch_eager_allowed(monkeypatch):
+    from vllm_ascend.model_executor.offloader.prefetch import (
+        _raise_if_pageable_prefetch_incompatible_with_graph,
+    )
+
+    monkeypatch.setattr("vllm_ascend.model_executor.offloader.prefetch.should_pin_memory", lambda: False)
+    monkeypatch.setattr("vllm.config.get_current_vllm_config", lambda: SimpleNamespace(
+        model_config=SimpleNamespace(enforce_eager=True)))
+    _raise_if_pageable_prefetch_incompatible_with_graph()
+
+
+def test_pinned_prefetch_graph_allowed(monkeypatch):
+    from vllm_ascend.model_executor.offloader.prefetch import (
+        _raise_if_pageable_prefetch_incompatible_with_graph,
+    )
+
+    monkeypatch.setattr("vllm_ascend.model_executor.offloader.prefetch.should_pin_memory", lambda: True)
+    monkeypatch.setattr("vllm.config.get_current_vllm_config", lambda: SimpleNamespace(
+        model_config=SimpleNamespace(enforce_eager=False)))
+    _raise_if_pageable_prefetch_incompatible_with_graph()

@@ -17,8 +17,14 @@ class AscendHY4DFlyProposer(AscendDflashProposer):
 
     def __init__(self, vllm_config, device, runner=None):
         super().__init__(vllm_config, device, runner)
-        if vllm_config.lora_config is not None or vllm_config.kv_transfer_config is not None:
-            raise ValueError("Ascend HY4 DFly does not support LoRA or PD disaggregation")
+        if vllm_config.lora_config is not None:
+            raise ValueError("Ascend HY4 DFly does not support LoRA")
+        transfer = vllm_config.kv_transfer_config
+        if transfer is not None:
+            if transfer.kv_connector != "MooncakeConnectorV1":
+                raise ValueError("HY4 DFly PD requires MooncakeConnectorV1")
+            if vllm_config.parallel_config.pipeline_parallel_size != 1:
+                raise ValueError("HY4 DFly PD currently requires PP1")
         if self.dynamic_spec is not None:
             raise ValueError("Ascend HY4 DFly does not support dynamic draft lengths")
         self.use_cuda_graph = False

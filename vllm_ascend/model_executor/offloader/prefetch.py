@@ -196,6 +196,21 @@ def _raise_if_nz_prefetch_incompatible_with_graph(param_infos: list[ParamInfo]) 
     )
 
 
+def _raise_if_pageable_prefetch_incompatible_with_graph() -> None:
+    """Reject pageable H2D before CANN obscures it with a capture-end error."""
+    from vllm.config import get_current_vllm_config
+
+    if should_pin_memory() or get_current_vllm_config().model_config.enforce_eager:
+        return
+    raise RuntimeError(
+        "Ascend prefetch weight offload with ACL graph capture requires pinned "
+        "CPU weights. Pageable H2D copies cannot be captured by CANN and cause "
+        "a secondary unjoined-stream/capture_end 107025 error. Unset "
+        "VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY (or set it to 0) and ensure "
+        "sufficient host pinned memory, or use enforce_eager=True."
+    )
+
+
 class AscendPrefetchOffloader(PrefetchOffloader):
     """Ascend prefetch offloader that reuses vLLM behavior with NZ buffers."""
 
@@ -231,6 +246,8 @@ class AscendPrefetchOffloader(PrefetchOffloader):
             vllm_prefetch._ModuleOffloader = original_module_offloader
 
     def post_init(self):
+        if self.module_offloaders:
+            _raise_if_pageable_prefetch_incompatible_with_graph()
         super().post_init()
 
         device: torch.device | None = None
