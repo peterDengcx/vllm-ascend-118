@@ -1,0 +1,318 @@
+{
+  "candidate": {
+    "attempt": "candidate-run03",
+    "result_directory": "results/candidate",
+    "exit_code": 0,
+    "validated_requests": 128,
+    "common_metrics": {
+      "Benchmark Duration": {
+        "total": "980983.8742 ms"
+      },
+      "Total Requests": {
+        "total": 128
+      },
+      "Failed Requests": {
+        "total": 0
+      },
+      "Success Requests": {
+        "total": 128
+      },
+      "Concurrency": {
+        "total": 28.1851
+      },
+      "Max Concurrency": {
+        "total": 32
+      },
+      "Request Throughput": {
+        "total": "0.1305 req/s"
+      },
+      "Total Input Tokens": {
+        "total": 16384000
+      },
+      "Total Generated Tokens": {
+        "total": 131072
+      },
+      "Input Token Throughput": {
+        "total": "16701.5997 token/s"
+      },
+      "Output Token Throughput": {
+        "total": "133.6128 token/s"
+      },
+      "Total Token Throughput": {
+        "total": "16835.2125 token/s"
+      }
+    },
+    "latency": {
+      "E2EL": {
+        "Performance Parameters": "E2EL",
+        "Stage": "total",
+        "Average": "216008.7 ms",
+        "Min": "20839.9 ms",
+        "Max": "251041.5 ms",
+        "Median": "242670.6 ms",
+        "P75": "243475.5 ms",
+        "P90": "243795.7 ms",
+        "P99": "243997.6 ms",
+        "N": "128"
+      },
+      "TTFT": {
+        "Performance Parameters": "TTFT",
+        "Stage": "total",
+        "Average": "207633.2 ms",
+        "Min": "12413.6 ms",
+        "Max": "242677.1 ms",
+        "Median": "234284.8 ms",
+        "P75": "235114.4 ms",
+        "P90": "235410.6 ms",
+        "P99": "235622.0 ms",
+        "N": "128"
+      },
+      "TPOT": {
+        "Performance Parameters": "TPOT",
+        "Stage": "total",
+        "Average": "8.2 ms",
+        "Min": "8.1 ms",
+        "Max": "8.3 ms",
+        "Median": "8.2 ms",
+        "P75": "8.2 ms",
+        "P90": "8.2 ms",
+        "P99": "8.2 ms",
+        "N": "128"
+      },
+      "ITL": {
+        "Performance Parameters": "ITL",
+        "Stage": "total",
+        "Average": "48.7 ms",
+        "Min": "0.0 ms",
+        "Max": "80.8 ms",
+        "Median": "49.2 ms",
+        "P75": "49.4 ms",
+        "P90": "49.8 ms",
+        "P99": "50.4 ms",
+        "N": "128"
+      },
+      "InputTokens": {
+        "Performance Parameters": "InputTokens",
+        "Stage": "total",
+        "Average": "128000.0",
+        "Min": "128000.0",
+        "Max": "128000.0",
+        "Median": "128000.0",
+        "P75": "128000.0",
+        "P90": "128000.0",
+        "P99": "128000.0",
+        "N": "128"
+      },
+      "OutputTokens": {
+        "Performance Parameters": "OutputTokens",
+        "Stage": "total",
+        "Average": "1024.0",
+        "Min": "1024.0",
+        "Max": "1024.0",
+        "Median": "1024.0",
+        "P75": "1024.0",
+        "P90": "1024.0",
+        "P99": "1024.0",
+        "N": "128"
+      },
+      "OutputTokenThroughput": {
+        "Performance Parameters": "OutputTokenThroughput",
+        "Stage": "total",
+        "Average": "6.1415 token/s",
+        "Min": "4.079 token/s",
+        "Max": "49.1366 token/s",
+        "Median": "4.2197 token/s",
+        "P75": "4.2363 token/s",
+        "P90": "9.0298 token/s",
+        "P99": "36.4113 token/s",
+        "N": "128"
+      },
+      "PrefillTokenThroughput": {
+        "Performance Parameters": "PrefillTokenThroughput",
+        "Stage": "total",
+        "Average": "871.727 token/s",
+        "Min": "527.4498 token/s",
+        "Max": "10311.2307 token/s",
+        "Median": "546.3437 token/s",
+        "P75": "548.5352 token/s",
+        "P90": "1218.6613 token/s",
+        "P99": "6541.6201 token/s",
+        "N": "128"
+      }
+    },
+    "duration_seconds": 980.9838742,
+    "service_output_tokens_per_second": 133.61279777090144,
+    "output_tokens_per_second_per_total_card": 16.70159972136268,
+    "output_tokens_per_second_per_decode_card": 33.40319944272536,
+    "mean_decode_span_ms": 8375.5,
+    "prefix_cache": {
+      "total_queries": 16499200.0,
+      "total_hits": 14745600.0,
+      "warmup_queries": 115200,
+      "formal_queries": 16384000.0,
+      "formal_hit_ratio": 0.9
+    }
+  },
+  "baseline": {
+    "attempt": "baseline-run01",
+    "result_directory": "results/baseline",
+    "exit_code": 0,
+    "validated_requests": 128,
+    "common_metrics": {
+      "Benchmark Duration": {
+        "total": "1004745.3548 ms"
+      },
+      "Total Requests": {
+        "total": 128
+      },
+      "Failed Requests": {
+        "total": 0
+      },
+      "Success Requests": {
+        "total": 128
+      },
+      "Concurrency": {
+        "total": 28.206
+      },
+      "Max Concurrency": {
+        "total": 32
+      },
+      "Request Throughput": {
+        "total": "0.1274 req/s"
+      },
+      "Total Input Tokens": {
+        "total": 16384000
+      },
+      "Total Generated Tokens": {
+        "total": 131072
+      },
+      "Input Token Throughput": {
+        "total": "16306.6193 token/s"
+      },
+      "Output Token Throughput": {
+        "total": "130.453 token/s"
+      },
+      "Total Token Throughput": {
+        "total": "16437.0723 token/s"
+      }
+    },
+    "latency": {
+      "E2EL": {
+        "Performance Parameters": "E2EL",
+        "Stage": "total",
+        "Average": "221404.8 ms",
+        "Min": "21138.9 ms",
+        "Max": "257391.9 ms",
+        "Median": "248732.7 ms",
+        "P75": "249637.5 ms",
+        "P90": "249930.0 ms",
+        "P99": "250138.7 ms",
+        "N": "128"
+      },
+      "TTFT": {
+        "Performance Parameters": "TTFT",
+        "Stage": "total",
+        "Average": "213075.8 ms",
+        "Min": "12773.8 ms",
+        "Max": "249058.8 ms",
+        "Median": "240411.4 ms",
+        "P75": "241302.7 ms",
+        "P90": "241603.9 ms",
+        "P99": "241809.5 ms",
+        "N": "128"
+      },
+      "TPOT": {
+        "Performance Parameters": "TPOT",
+        "Stage": "total",
+        "Average": "8.1 ms",
+        "Min": "8.1 ms",
+        "Max": "8.2 ms",
+        "Median": "8.1 ms",
+        "P75": "8.1 ms",
+        "P90": "8.2 ms",
+        "P99": "8.2 ms",
+        "N": "128"
+      },
+      "ITL": {
+        "Performance Parameters": "ITL",
+        "Stage": "total",
+        "Average": "48.4 ms",
+        "Min": "0.0 ms",
+        "Max": "70.4 ms",
+        "Median": "48.9 ms",
+        "P75": "49.1 ms",
+        "P90": "49.5 ms",
+        "P99": "50.1 ms",
+        "N": "128"
+      },
+      "InputTokens": {
+        "Performance Parameters": "InputTokens",
+        "Stage": "total",
+        "Average": "128000.0",
+        "Min": "128000.0",
+        "Max": "128000.0",
+        "Median": "128000.0",
+        "P75": "128000.0",
+        "P90": "128000.0",
+        "P99": "128000.0",
+        "N": "128"
+      },
+      "OutputTokens": {
+        "Performance Parameters": "OutputTokens",
+        "Stage": "total",
+        "Average": "1024.0",
+        "Min": "1024.0",
+        "Max": "1024.0",
+        "Median": "1024.0",
+        "P75": "1024.0",
+        "P90": "1024.0",
+        "P99": "1024.0",
+        "N": "128"
+      },
+      "OutputTokenThroughput": {
+        "Performance Parameters": "OutputTokenThroughput",
+        "Stage": "total",
+        "Average": "5.9992 token/s",
+        "Min": "3.9784 token/s",
+        "Max": "48.4414 token/s",
+        "Median": "4.1169 token/s",
+        "P75": "4.1274 token/s",
+        "P90": "8.8088 token/s",
+        "P99": "35.6916 token/s",
+        "N": "128"
+      },
+      "PrefillTokenThroughput": {
+        "Performance Parameters": "PrefillTokenThroughput",
+        "Stage": "total",
+        "Average": "848.3247 token/s",
+        "Min": "513.9348 token/s",
+        "Max": "10020.5159 token/s",
+        "Median": "532.4207 token/s",
+        "P75": "533.8413 token/s",
+        "P90": "1186.0281 token/s",
+        "P99": "6332.5081 token/s",
+        "N": "128"
+      }
+    },
+    "duration_seconds": 1004.7453548,
+    "service_output_tokens_per_second": 130.45295444644339,
+    "output_tokens_per_second_per_total_card": 16.306619305805423,
+    "output_tokens_per_second_per_decode_card": 32.613238611610846,
+    "mean_decode_span_ms": 8329.0,
+    "prefix_cache": {
+      "total_queries": 16499200.0,
+      "total_hits": 14745600.0,
+      "warmup_queries": 115200,
+      "formal_queries": 16384000.0,
+      "formal_hit_ratio": 0.9
+    }
+  },
+  "inputs_identical": true,
+  "output_throughput_change_percent": 2.4222090928230466,
+  "latency_change_percent": {
+    "TTFT": -2.5543022717737007,
+    "TPOT": 1.2345679012345734,
+    "ITL": 0.6198347107438051,
+    "E2EL": -2.437210033386805
+  }
+}

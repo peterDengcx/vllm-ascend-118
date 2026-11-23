@@ -1,0 +1,34 @@
+{
+  "candidate_only": true,
+  "hardware": "Ascend950PR",
+  "target_650E_status": "not_run",
+  "concurrency": 8,
+  "requests": 8,
+  "unique_inputs": 1,
+  "input_tokens": 128000,
+  "output_tokens": 1024,
+  "prefix_cache": {
+    "queries": 1024000,
+    "hits": 921600,
+    "formal_hit_ratio": 0.9,
+    "mechanism": "P-only task-local maximum cache-read length of 115200 tokens"
+  },
+  "profiler": {
+    "level": "Level1",
+    "aic_metrics": "PipeUtilization",
+    "phases": [
+      "prefill",
+      "decode"
+    ]
+  },
+  "capture_status": "completed",
+  "success": 8,
+  "failed": 0,
+  "parsing_status": "D four workers parsed; P parsing resumed on a separate filesystem",
+  "full_validation_status": "pending",
+  "full_download_status": "pending",
+  "published_scope": "D per-worker aggregate CSVs and capture metadata; no raw multi-GB timelines in Git",
+  "runtime_usage_cached_tokens_note": "API usage reflects D-side counters; P hit ratio uses P metric deltas",
+  "parsed_after_capture": true,
+  "not_comparable_to_unprofiled_C32_N128": true
+}

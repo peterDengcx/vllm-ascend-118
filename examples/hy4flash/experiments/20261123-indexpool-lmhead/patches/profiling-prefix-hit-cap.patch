@@ -1,0 +1,12 @@
+--- candidate/vllm/v1/request.py
++++ profile-prefill/vllm/v1/request.py
+@@ -352,7 +352,8 @@
+     def get_max_cache_hit_length(self, bound: int | None = None) -> int:
+         """Longest prefix cache hit allowed, optionally tightened by bound."""
+         # The last token is always recomputed to produce logits.
+-        limits = (self.num_tokens - 1, self.prefix_cache_hit_limit, bound)
++        # Profiling load control: reuse exactly the prewarmed 90% prefix.
++        limits = (self.num_tokens - 1, self.prefix_cache_hit_limit, bound, 115200)
+         return min(limit for limit in limits if limit is not None)
+ 
+     @property

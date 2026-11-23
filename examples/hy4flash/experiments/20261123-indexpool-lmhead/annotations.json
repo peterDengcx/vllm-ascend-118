@@ -1,0 +1,100 @@
+{
+  "schema": "hy4-experiment-labels/v1",
+  "date": "2026-11-23",
+  "hardware": {
+    "measured": "Ascend950PR",
+    "cards": 8,
+    "hbm_mb_per_card": 86016,
+    "alias": "node-118"
+  },
+  "target_retest": {
+    "hardware": "650E",
+    "status": "not_run",
+    "required_before_merge": true
+  },
+  "upstream_commit": "2c123f517504fa551379f7f5c7f3c4ac0e8b5686",
+  "dataset": {
+    "source": "synthetic",
+    "input_tokens": 128000,
+    "output_tokens": 1024,
+    "shared_prefix_tokens": 115200,
+    "seed": 1024,
+    "frozen_128_rows_sha256": "8b46b164426cf173c2315bc20e270c15cb2cab42b12a493d65472cf2d420b9a2"
+  },
+  "topology": {
+    "prefill": {
+      "devices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "tp": 4,
+      "dp": 1
+    },
+    "decode": {
+      "devices": [
+        4,
+        5,
+        6,
+        7
+      ],
+      "tp": 1,
+      "dp": 4,
+      "dfly_steps": 5
+    },
+    "ep": true
+  },
+  "runtime": {
+    "cann": "9.1.0",
+    "torch": "2.10.0+cpu",
+    "torch_npu": "2.10.0.post4",
+    "vllm": "0.30.0+empty",
+    "transformers": "5.14.1",
+    "compute_dtype": "bfloat16",
+    "kv_dtype": "fp8"
+  },
+  "comparison": {
+    "concurrency": 32,
+    "requests_per_arm": 128,
+    "repetitions": 1,
+    "shared_compatibility": true,
+    "formal_prefix_hit_ratio": 0.9,
+    "output_throughput_scope": "whole eight-card PD service",
+    "output_throughput_change_percent": 2.4222090928230466,
+    "stable_gain_established": false,
+    "model_accuracy_certified": false
+  },
+  "cases": [
+    {
+      "id": "C01",
+      "arm": "baseline",
+      "indexpool_context_aware": false,
+      "fp32_head_cache": false
+    },
+    {
+      "id": "C02",
+      "arm": "candidate",
+      "indexpool_context_aware": true,
+      "fp32_head_cache": true
+    }
+  ],
+  "excluded": [
+    {
+      "id": "old-b059555",
+      "reason": "different upstream revision; no valid candidate pair"
+    },
+    {
+      "id": "candidate-run01",
+      "reason": "runtime binding check rejected; no formal requests"
+    },
+    {
+      "id": "candidate-run02",
+      "reason": "warmup operator unavailable; no formal requests"
+    },
+    {
+      "id": "profile-run01",
+      "reason": "identical inputs raised actual cache hit rate to 98.70625%"
+    }
+  ]
+}
