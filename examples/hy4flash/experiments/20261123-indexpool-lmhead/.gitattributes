@@ -2,6 +2,6 @@
 patches/*.patch -whitespace
 # Preserve byte hashes of the archived sources and measured evidence.
 patches/*.patch -text
-reference/*.py -text
-results/** -text
-profiling/** -text
+reference/*.py -text whitespace=cr-at-eol
+results/** -text whitespace=cr-at-eol
+profiling/** -text whitespace=cr-at-eol
