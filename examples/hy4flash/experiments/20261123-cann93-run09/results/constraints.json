@@ -1,0 +1,50 @@
+{
+  "case": "C01-modified-cann93-run09",
+  "host": "141.61.81.118",
+  "container": "hy4-118-cann93-ops-1123",
+  "input_tokens": 128000,
+  "output_tokens": 1024,
+  "shared_prefix_tokens": 115200,
+  "concurrency": 32,
+  "requests": 128,
+  "seed": 1024,
+  "p_devices": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "d_devices": [
+    4,
+    5,
+    6,
+    7
+  ],
+  "p_tp": 4,
+  "p_dp": 1,
+  "d_tp": 1,
+  "d_dp": 4,
+  "speculative_tokens": 5,
+  "profiling": false,
+  "metric_threshold": null,
+  "run_baseline": false,
+  "retain_logs": "all",
+  "experiment_authorized_by": "继续这里的实验；你要跑起来这里的实验，不是在这做诊断",
+  "remote_host_dir": "/root/hy4-cann93-validate-20261123/perf-prefix90-128k1k-20261123-09",
+  "remote_container_dir": "/workspace/hy4-cann93/perf-prefix90-128k1k-20261123-09",
+  "additional_switches": {
+    "hy4flash_cann_engram_rms": true,
+    "hy4flash_dfly_dp_graph": false,
+    "hy4flash_fused_ihc_post": true,
+    "hy4flash_bulk_c8_decode_reads": true
+  },
+  "runtime_fix": "iHC post gate local variable rename; compile/eager/changed-input graph bitwise validation passed",
+  "process_environment": {
+    "ASCEND_GLOBAL_RESOURCE_CONFIG": {
+      "comm_resource_config.link_priority": "PEER2PEER"
+    }
+  },
+  "resource_policy": "Wait for all eight devices; do not terminate other tasks",
+  "communication_fix": "Explicit complete per-physical-device LocalCommRes; preserve P/D device visibility and ub_ctp",
+  "communication_validation": "communication-validation.json"
+}

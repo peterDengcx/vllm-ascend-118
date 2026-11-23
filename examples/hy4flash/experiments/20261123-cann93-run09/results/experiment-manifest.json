@@ -1,0 +1,44 @@
+{
+  "container": "hy4-118-cann93-ops-1123",
+  "host_directory": "/root/hy4-cann93-validate-20261123/perf-prefix90-128k1k-20261123-09",
+  "container_directory": "/workspace/hy4-cann93/perf-prefix90-128k1k-20261123-09",
+  "input_sha256": "8b46b164426cf173c2315bc20e270c15cb2cab42b12a493d65472cf2d420b9a2",
+  "cases": [
+    "modified-run09"
+  ],
+  "source_root": "/workspace/hy4-cann93/src/vllm-ascend-hy4-flash-2c123f517504fa551379f7f5c7f3c4ac0e8b5686",
+  "vllm_source": "/workspace/hy4-cann93/src/vllm-src",
+  "legacy_compatibility_patches": false,
+  "legacy_indexpool_short_graph_and_fp32_cache": false,
+  "cann93_native_ops": true,
+  "profiling": false,
+  "input_tokens": 128000,
+  "output_tokens": 1024,
+  "concurrency": 32,
+  "requests": 128,
+  "warmup_prefix_tokens": 115200,
+  "engram_compatibility": "same pageable shared CPU storage as historical run; D only",
+  "private_shm_bytes": 274877906944,
+  "explicit_additional_switches": {
+    "hy4flash_cann_engram_rms": true,
+    "hy4flash_dfly_dp_graph": false,
+    "hy4flash_fused_ihc_post": true,
+    "hy4flash_bulk_c8_decode_reads": true
+  },
+  "source_snapshot": "python-source-as-run.tar.gz",
+  "source_manifest": "source-sha256.json",
+  "source_changes": "current CANN9.3 source; draft DP graph kept disabled",
+  "previous_failed_run": "/root/hy4-cann93-validate-20261123/perf-prefix90-128k1k-20261123-08",
+  "repair_validation": "/root/hy4-cann93-validate-20261123/perf-prefix90-128k1k-20261123-05/runtime-fix/validation.json",
+  "communication_change": "link_priority PEER2PEER and explicit complete per-physical-device LocalCommRes; no protocol or installed-library replacement",
+  "communication_resource_sha256": {
+    "3.json": "1d700573f352dad853f3d1b4fdaa2d390be460ade16739d7c903e77e4096e27b",
+    "7.json": "29360432d72e566dc3a5a2b58a5ace8dc5adda5ed02b870e94311e0d966535e3",
+    "6.json": "32b5478d33edef12da19d29ca7931b64be3cba8f227b485ca85b78b710d20b1e",
+    "0.json": "90f59047ed8fbaaf359ef4dcab8b60656d77c056dd145896095e82f47f0ce1b4",
+    "5.json": "9459dd9e246ba78a55989200deb47c742eb345f3bae38bb007556759c605f56f",
+    "2.json": "2de28df149d4aadd116e72ff3d0d134615f63f0988c67661c96485cf0c3663a9",
+    "1.json": "696bd2d53312485c5bcc2588dc1b394d0f965fb791308019c7a44df4da2cbcc4",
+    "4.json": "33c721e2ce5d12a1fbca795f2623560073052e769796026a3692c9be3cc070ef"
+  }
+}

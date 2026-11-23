@@ -1,0 +1,803 @@
+--- /dev/null
++++ b/tests/ut/models/test_hy_v4_flash_dfly_dp_graph.py
+@@ -0,0 +1,167 @@
++# SPDX-License-Identifier: Apache-2.0
++
++from contextlib import contextmanager
++from copy import copy
++from types import SimpleNamespace
++
++import pytest
++import torch
++from vllm.config import CUDAGraphMode
++
++from vllm_ascend.models.hy_v4_flash import dfly_speculator
++
++
++def make_speculator():
++    spec = object.__new__(dfly_speculator.FlashDFlySpeculator)
++    parallel = SimpleNamespace(
++        tensor_parallel_size=1,
++        pipeline_parallel_size=1,
++        prefill_context_parallel_size=1,
++        decode_context_parallel_size=1,
++        data_parallel_size=4,
++        is_moe_model=True,
++    )
++    spec.vllm_config = SimpleNamespace(
++        additional_config={"hy4flash_dfly_dp_graph": True},
++        parallel_config=parallel,
++        compilation_config=SimpleNamespace(decode_cudagraph_capture_request_sizes=[1, 3]),
++    )
++    spec.speculative_config = SimpleNamespace(enforce_eager=False, draft_parallel_config=copy(parallel))
++    spec.dp_size = 4
++    spec.max_num_reqs = 3
++    spec.max_num_tokens = 18
++    spec.num_query_per_req = 6
++    spec.num_speculative_steps = 5
++    spec.hidden_size = 4
++    spec.device = torch.device("cpu")
++    spec.dtype = torch.bfloat16
++    spec.cudagraph_manager = None
++    spec.model_state = SimpleNamespace(rope_state=None)
++    spec.target = SimpleNamespace(
++        model=SimpleNamespace(embed_tokens=SimpleNamespace(tp_size=1, token_exchange_group=None)),
++        lm_head=SimpleNamespace(tp_size=1),
++    )
++    spec.model = torch.nn.Identity()
++    return spec
++
++
++def test_local_tp1_draft_can_capture_without_changing_target(monkeypatch):
++    spec = make_speculator()
++    monkeypatch.setattr(dfly_speculator, "CudaGraphManager", lambda *a, **kw: SimpleNamespace())
++    monkeypatch.setattr(torch.npu, "graph_pool_handle", lambda: "private-pool")
++    spec.init_cudagraph_manager(CUDAGraphMode.FULL_DECODE_ONLY)
++    assert spec.cudagraph_manager is not None
++    assert spec.cudagraph_manager.pool == "private-pool"
++    assert spec.graph_vllm_config.parallel_config.is_moe_model is False
++    assert spec.vllm_config.parallel_config.is_moe_model is True
++    assert spec.graph_vllm_config.parallel_config is not spec.vllm_config.parallel_config
++    assert spec.graph_ids.shape == (3, 6)
++
++
++@pytest.mark.parametrize("field", [
++    "tensor_parallel_size", "pipeline_parallel_size",
++    "prefill_context_parallel_size", "decode_context_parallel_size",
++])
++@pytest.mark.parametrize("draft", [False, True])
++def test_parallel_draft_stays_eager(field, draft):
++    spec = make_speculator()
++    parallel = spec.speculative_config.draft_parallel_config if draft else spec.vllm_config.parallel_config
++    setattr(parallel, field, 2)
++    assert not spec._dp_graph_is_local()
++    spec.init_cudagraph_manager(CUDAGraphMode.FULL_DECODE_ONLY)
++    assert spec.cudagraph_manager is None
++
++
++@pytest.mark.parametrize("case", ["head", "embedding", "exchange", "reduce", "draft_linear"])
++def test_dp_axis_collectives_stay_eager(case):
++    spec = make_speculator()
++    if case == "head":
++        spec.target.lm_head.tp_size = 4
++    elif case == "embedding":
++        spec.target.model.embed_tokens.tp_size = 4
++    elif case == "exchange":
++        spec.target.model.embed_tokens.token_exchange_group = SimpleNamespace(world_size=4)
++    elif case == "reduce":
++        spec.target.model.embed_tokens.output_reduce_group = SimpleNamespace(world_size=4)
++    else:
++        spec.model.tp_size = 2
++    assert not spec._dp_graph_is_local()
++    spec.init_cudagraph_manager(CUDAGraphMode.FULL_DECODE_ONLY)
++    assert spec.cudagraph_manager is None
++
++
++@pytest.mark.parametrize("case", ["disabled", "eager", "no_graphs", "no_sizes"])
++def test_graph_opt_in_and_runtime_modes(case):
++    spec = make_speculator()
++    mode = CUDAGraphMode.FULL_DECODE_ONLY
++    if case == "disabled":
++        spec.vllm_config.additional_config.clear()
++    elif case == "eager":
++        spec.speculative_config.enforce_eager = True
++    elif case == "no_graphs":
++        mode = CUDAGraphMode.NONE
++    else:
++        spec.vllm_config.compilation_config.decode_cudagraph_capture_request_sizes = []
++    spec.init_cudagraph_manager(mode)
++    assert spec.cudagraph_manager is None
++
++
++def test_graph_option_rejects_string_boolean():
++    spec = make_speculator()
++    spec.vllm_config.additional_config["hy4flash_dfly_dp_graph"] = "false"
++    with pytest.raises(ValueError, match="must be a boolean"):
++        spec.init_cudagraph_manager(CUDAGraphMode.FULL_DECODE_ONLY)
++
++
++def test_single_dp_replica_retains_existing_tp_graph_support(monkeypatch):
++    spec = make_speculator()
++    spec.dp_size = spec.vllm_config.parallel_config.data_parallel_size = 1
++    spec.vllm_config.parallel_config.tensor_parallel_size = 4
++    spec.vllm_config.additional_config.clear()
++    monkeypatch.setattr(dfly_speculator, "CudaGraphManager", lambda *a, **kw: SimpleNamespace())
++    monkeypatch.setattr(torch.npu, "graph_pool_handle", lambda: "private-pool")
++    spec.init_cudagraph_manager(CUDAGraphMode.FULL_DECODE_ONLY)
++    assert spec.cudagraph_manager is not None
++
++
++def test_capture_uses_npu_communicator_and_dense_context(monkeypatch):
++    spec = make_speculator()
++    spec.vllm_config.model_config = SimpleNamespace(max_model_len=256)
++    spec.kv_layers = (SimpleNamespace(kv_cache=torch.empty(1, 1, 16, 576)),)
++    spec.offsets = torch.arange(6)
++    spec.input_buffers = SimpleNamespace(positions=torch.empty(18, dtype=torch.long))
++    spec.draft_tokens = torch.empty(3, 5, dtype=torch.long)
++    spec.model.config = SimpleNamespace(mask_token_id=2)
++    state = {"switched": False, "forward": False}
++
++    @contextmanager
++    def switch():
++        state["switched"] = True
++        try:
++            yield
++        finally:
++            state["switched"] = False
++
++    @contextmanager
++    def context(metadata, config, **kwargs):
++        assert state["switched"]
++        assert config.parallel_config.is_moe_model is False
++        assert kwargs["num_tokens"] == 6
++        yield
++
++    def capture(prepare, **kwargs):
++        assert state["switched"]
++        forward = prepare(SimpleNamespace(num_reqs=1, num_tokens=6), False)
++        forward(CUDAGraphMode.NONE)
++
++    def forward(*args):
++        state["forward"] = True
++
++    monkeypatch.setattr(dfly_speculator, "communicator_switch", switch)
++    monkeypatch.setattr(dfly_speculator, "set_forward_context", context)
++    monkeypatch.setattr(dfly_speculator, "CudaGraphManager", lambda *a, **kw: SimpleNamespace(capture=capture))
++    monkeypatch.setattr(torch.npu, "graph_pool_handle", lambda: "private-pool")
++    spec._forward_queries = forward
++    spec.init_cudagraph_manager(CUDAGraphMode.FULL_DECODE_ONLY)
++    spec.capture()
++    assert state == {"switched": False, "forward": True}
+--- a/vllm_ascend/ascend_config.py
++++ b/vllm_ascend/ascend_config.py
+@@ -1987,6 +1987,10 @@
+         "enable_flashcomm1",
+         # Consumed by the HYV4 Flash model and its attention metadata builder.
+         "hy4flash_cannbot_mla_prolog",
++        "hy4flash_cann_engram_rms",
++        "hy4flash_fused_ihc_post",
++        "hy4flash_bulk_c8_decode_reads",
++        "hy4flash_dfly_dp_graph",
+         "hy4flash_gpu_c8_scale",
+         "hy4flash_precise_decode",
+         "hy4flash_triton_mla_logits",
+--- a/vllm_ascend/distributed/kv_transfer/utils/mooncake_transfer_engine.py
++++ b/vllm_ascend/distributed/kv_transfer/utils/mooncake_transfer_engine.py
+@@ -1,4 +1,33 @@
+ import threading
++
++
++def _configure_local_comm_res():
++    """Use an opt-in per-device descriptor when visibility hides remote peers."""
++    import json
++    import os
++    from pathlib import Path
++
++    resource_dir = os.environ.get("HY4_MOONCAKE_LOCAL_COMM_RES_DIR")
++    if not resource_dir:
++        return
++    import torch
++    from vllm.platforms import current_platform
++
++    physical_id = current_platform.visible_device_id_to_physical_device_id(torch.npu.current_device())
++    config_path = Path(resource_dir) / f"{physical_id}.json"
++    config = json.loads(config_path.read_text())
++    endpoints = config.get("endpoint_list")
++    if config.get("version") != "1.3" or not isinstance(endpoints, list) or not endpoints:
++        raise ValueError(f"Invalid per-device Mooncake resource descriptor: {config_path}")
++    if any(endpoint.get("protocol") != "ub_ctp" or endpoint.get("placement") != "device" for endpoint in endpoints):
++        raise ValueError(f"Expected original device ub_ctp endpoints: {config_path}")
++    os.environ["ASCEND_LOCAL_COMM_RES"] = json.dumps(config)
++    import logging
++
++    logging.getLogger(__name__).info(
++        "Using complete Mooncake device resources: physical_device=%s endpoints=%s path=%s",
++        physical_id, len(endpoints), config_path,
++    )
+ 
+ 
+ class GlobalTE:
+@@ -34,6 +63,7 @@
+                     # retries once the minimum supported version includes that
+                     # fix and repeated-failure resource cleanup is verified.
+                     self._initialization_attempted = True
++                    _configure_local_comm_res()
+                     engine = TransferEngine()
+                     device_name = device_name if device_name is not None else ""
+                     ret_value = engine.initialize(hostname, "P2PHANDSHAKE", "ascend", device_name)
+--- a/vllm_ascend/models/hy_v4_flash/attention.py
++++ b/vllm_ascend/models/hy_v4_flash/attention.py
+@@ -289,6 +289,9 @@
+         self.use_cann_prefill = uses_prefill_ops(vllm_config) and not reuse_target
+         transfer = vllm_config.kv_transfer_config
+         self.use_pd_decode = transfer is not None and transfer.kv_role == "kv_consumer"
++        self.bulk_c8_decode_reads = vllm_config.additional_config.get("hy4flash_bulk_c8_decode_reads", True)
++        if not isinstance(self.bulk_c8_decode_reads, bool):
++            raise ValueError("hy4flash_bulk_c8_decode_reads must be a boolean")
+         self.ops = triton_ops
+         if self.use_cann_prefill:
+             from . import li_prefill_p0, prefill_ops
+@@ -1168,12 +1171,22 @@
+         return self.indexer.encode_keys(raw, key_pos, full_graph=True)
+ 
+     def _gather_attention_rows(self, cache, block_table, block_size, positions, *, mask_padding=False):
++        # Keep small reads fused, including shared sliding-window histories.
++        # Large decode reads use the existing bulk path; negative indices still
++        # go through its clamp-and-mask handling below.
++        use_bulk_decode_read = (
++            self.use_pd_decode
++            and self.bulk_c8_decode_reads
++            and self.ops is triton_ops
++            and positions.numel() > MAX_FUSED_C8_READ_ROWS
++        )
+         if (
+             self.use_fp8_cache
+             and (self.use_cann_prefill or HAS_TRITON)
+             and cache.device.type == "npu"
+             and cache.shape[-1] % 4 == 0
+             and (mask_padding or positions.numel() <= MAX_FUSED_C8_READ_ROWS)
++            and not use_bulk_decode_read
+         ):
+             return self.ops.gather_c8_rows(cache, block_table, block_size, positions)
+         logical = positions.clamp_min(0) if mask_padding else positions
+--- a/vllm_ascend/models/hy_v4_flash/dfly_speculator.py
++++ b/vllm_ascend/models/hy_v4_flash/dfly_speculator.py
+@@ -15,6 +15,8 @@
+ from vllm.utils.torch_utils import set_default_torch_dtype
+ from vllm.v1.worker.gpu.cudagraph_utils import CudaGraphManager
+ from vllm.v1.worker.gpu.spec_decode.speculator import DraftModelSpeculator
++
++from vllm_ascend.worker.v2.utils import communicator_switch
+ 
+ from .dfly import CHECKPOINT_PREFIX, MODEL_PREFIX, FlashDFlyDraft
+ 
+@@ -104,9 +106,22 @@
+         self.model_state = model_state
+ 
+     def init_cudagraph_manager(self, cudagraph_mode):
+-        # Independently scheduled DP replicas can propose different batch sizes.
+-        if not cudagraph_mode.has_full_cudagraphs() or self.speculative_config.enforce_eager or self.dp_size > 1:
++        if not cudagraph_mode.has_full_cudagraphs() or self.speculative_config.enforce_eager:
+             return
++        enable_dp_graph = self.vllm_config.additional_config.get("hy4flash_dfly_dp_graph", False)
++        if not isinstance(enable_dp_graph, bool):
++            raise ValueError("hy4flash_dfly_dp_graph must be a boolean")
++        # DP replicas propose independently, including empty batches. Only a
++        # local dense draft can replay without matching calls on other ranks.
++        if self.dp_size > 1:
++            if not enable_dp_graph:
++                return
++            if not self._dp_graph_is_local():
++                logger.warning_once(
++                    "HYV4 DFly DP ACLGraph requires TP1 with local Embedding, LMHead and draft projections; "
++                    "keeping eager drafting for this parallel layout."
++                )
++                return
+         compilation = self.vllm_config.compilation_config
+         width = self.num_query_per_req
+         max_reqs = min(self.max_num_reqs, self.max_num_tokens // width)
+@@ -115,8 +130,14 @@
+         )
+         if not graph_batches:
+             return
++        # The draft has dense FFNs, even though the target is MoE. Do not let
++        # set_forward_context coordinate draft capture batches across DP.
++        # Copy the config: the target still needs its original DP/EP metadata.
++        self.graph_vllm_config = copy(self.vllm_config)
++        self.graph_vllm_config.parallel_config = copy(self.vllm_config.parallel_config)
++        self.graph_vllm_config.parallel_config.is_moe_model = False
+         self.cudagraph_manager = CudaGraphManager(
+-            self.vllm_config,
++            self.graph_vllm_config,
+             self.device,
+             CUDAGraphMode.FULL_DECODE_ONLY,
+             {width: max_reqs},
+@@ -131,6 +152,36 @@
+         self.graph_source_rows = torch.empty(capacity, dtype=torch.long, device=self.device)
+         self.graph_query_positions = torch.empty_like(self.graph_ids)
+         self.graph_rope_dims = getattr(getattr(self.model_state, "rope_state", None), "num_dims", 0)
++        if self.dp_size > 1:
++            logger.info(
++                "HYV4 DFly local DP ACLGraph enabled for %d replicas; capture request sizes: %s.",
++                self.dp_size,
++                graph_batches,
++            )
++
++    def _dp_graph_is_local(self):
++        for parallel in (self.vllm_config.parallel_config, self.speculative_config.draft_parallel_config):
++            if any(
++                getattr(parallel, field) != 1
++                for field in (
++                    "tensor_parallel_size",
++                    "pipeline_parallel_size",
++                    "prefill_context_parallel_size",
++                    "decode_context_parallel_size",
++                )
++            ):
++                return False
++        # Fine-grained Embedding/LMHead TP can communicate across the DP axis
++        # even when the model's TP size is one. Inspect the loaded modules.
++        embedding = self.target.model.embed_tokens
++        if any(getattr(module, "tp_size", None) != 1 for module in (embedding, self.target.lm_head)):
++            return False
++        if getattr(embedding, "token_exchange_group", None) is not None:
++            return False
++        reduce_group = getattr(embedding, "output_reduce_group", None)
++        if reduce_group is not None and reduce_group.world_size > 1:
++            return False
++        return all(getattr(module, "tp_size", 1) == 1 for module in self.model.modules())
+ 
+     def capture(self):
+         if self.cudagraph_manager is None:
+@@ -162,14 +213,15 @@
+             result = self.draft_tokens[:batch]
+ 
+             def forward(mode):
+-                with set_forward_context(None, self.vllm_config, num_tokens=count, cudagraph_runtime_mode=mode):
++                with set_forward_context(None, self.graph_vllm_config, num_tokens=count, cudagraph_runtime_mode=mode):
+                     self._forward_queries(
+                         ids, positions, target_hidden, active, result, source_rows, query_positions, tables
+                     )
+ 
+             return forward
+ 
+-        self.cudagraph_manager.capture(prepare, progress_bar_desc="Capturing HYV4 DFly ACLGraphs")
++        with communicator_switch():
++            self.cudagraph_manager.capture(prepare, progress_bar_desc="Capturing HYV4 DFly ACLGraphs")
+ 
+     def _forward_queries(
+         self, ids, positions, target_hidden, active, result, source_rows, query_positions, block_tables
+--- a/vllm_ascend/models/hy_v4_flash/engram.py
++++ b/vllm_ascend/models/hy_v4_flash/engram.py
+@@ -2,9 +2,12 @@
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ """HYV4 Flash Engram with request-local n-grams and TP-sharded row storage."""
+ 
++import os
++
+ import numpy as np
+ import torch
+ import torch.distributed as dist
++import torch_npu
+ from torch import nn
+ from vllm.distributed import (
+     get_dp_group,
+@@ -18,6 +21,31 @@
+ from vllm.model_executor.model_loader.weight_utils import default_weight_loader
+ from vllm.model_executor.utils import set_weight_attrs
+ from vllm.models.hy_v4_flash.reference import decode_e4m3fn, hash_ngrams
++
++from vllm_ascend.device.device_config import is_950
++
++
++_CANN_ENGRAM_MAX_TOKENS = 512
++_CANN_RMS_ALIGNMENT = 32
++
++
++def _engram_inverse_rms(value, weight, epsilon, use_cann):
++    if (
++        use_cann
++        and value.device.type == "npu"
++        and value.dtype == weight.dtype == torch.float32
++        and value.ndim in (2, 3)
++        and 0 < value.shape[0] <= _CANN_ENGRAM_MAX_TOKENS
++        and value.shape[-1] % _CANN_RMS_ALIGNMENT == 0
++        and value.is_contiguous()
++        and weight.shape == (value.shape[-1],)
++        and weight.device == value.device
++        and weight.is_contiguous()
++        and not torch.is_autocast_enabled("npu")
++    ):
++        # gamma does not affect rstd. Keep the original multiply order below.
++        return torch_npu.npu_rms_norm(value, weight, epsilon)[1]
++    return (value.square().mean(-1, keepdim=True) + epsilon).rsqrt()
+ 
+ 
+ class FlashEngramLayout:
+@@ -197,9 +225,14 @@
+ 
+     def _allocate_storage(self, shape, dtype, leaf):
+         if self._shared_group is not None and shape[0]:
+-            from vllm_ascend.models.deepseek_v41.engram.npu import SharedUvaBuffer
+-
+-            buffer = SharedUvaBuffer(shape, dtype, torch.device("npu", torch.npu.current_device()), self._shared_group)
++            if os.environ.get("HY4_DFLY_PAGEABLE_ENGRAM") == "1":
++                from pageable_engram_probe import PageableEngramBuffer
++
++                buffer = PageableEngramBuffer(shape, dtype, self._shared_group)
++            else:
++                from vllm_ascend.models.deepseek_v41.engram.npu import SharedUvaBuffer
++
++                buffer = SharedUvaBuffer(shape, dtype, torch.device("npu", torch.npu.current_device()), self._shared_group)
+             self._shared_buffers[leaf] = buffer
+             logger.info(
+                 "HYV4 Flash Engram DP shared table: dp_rank=%d tp_rank=%d field=%s rows=%d bytes=%d backing=%s",
+@@ -214,7 +247,7 @@
+         parameter = getattr(self.embedding, leaf, None)
+         storage = {"device": parameter.device} if parameter is not None else {}
+         if self.cpu_offload:
+-            storage = {"device": "cpu", "pin_memory": True}
++            storage = {"device": "cpu", "pin_memory": os.environ.get("HY4_DFLY_PAGEABLE_ENGRAM") != "1"}
+         return torch.empty(shape, dtype=dtype, **storage)
+ 
+     def _copy_shared_weight(self, parameter, shard):
+@@ -304,6 +337,14 @@
+     def __init__(self, vllm_config, layout, layer_id, prefix):
+         super().__init__()
+         config = vllm_config.model_config.hf_text_config
++        use_cann = vllm_config.additional_config.get("hy4flash_cann_engram_rms", True)
++        if not isinstance(use_cann, bool):
++            raise ValueError("hy4flash_cann_engram_rms must be a boolean")
++        transfer = vllm_config.kv_transfer_config
++        self.use_cann_inverse_rms = (
++            use_cann and is_950() and hasattr(torch_npu, "npu_rms_norm")
++            and transfer is not None and transfer.kv_role == "kv_consumer"
++        )
+         index = layout.layer_ids.index(layer_id)
+         sizes = [p for order in layout.primes[index] for p in order]
+         storage = vllm_config.engram_config
+@@ -353,7 +394,8 @@
+         local = self.multi_head_embedding
+         local_hashes = hashes[:, local.head_start : local.head_end]
+         x = rows.masked_fill(local_hashes.unsqueeze(-1) < 0, 0)
+-        x = (x * (x.square().mean(-1, keepdim=True) + eps).rsqrt() * gamma).to(hidden.dtype)
++        inverse = _engram_inverse_rms(x, gamma[0], eps, self.use_cann_inverse_rms)
++        x = (x * inverse * gamma).to(hidden.dtype)
+         x = x.flatten(1)
+         gates = []
+         for channel in range(self.hc_mult):
+@@ -368,7 +410,9 @@
+         if local.tp_size > 1:
+             value = tensor_model_parallel_all_reduce(value)
+         value = value.float()
+-        signal = self.unified_pre_gamma.float() * value * (value.square().mean(-1, keepdim=True) + eps).rsqrt()
++        gamma = self.unified_pre_gamma.float()
++        inverse = _engram_inverse_rms(value, gamma, eps, self.use_cann_inverse_rms)
++        signal = gamma * value * inverse
+         scales = torch.stack(list(self.unified_per_hc_scales)).float()
+         result = ((gate.float().unsqueeze(-1) + scales) * signal.unsqueeze(1)).to(hidden.dtype)
+         return hidden + result.masked_fill((hashes < 0).all(-1)[:, None, None], 0)
+--- a/vllm_ascend/models/hy_v4_flash/ihc.py
++++ b/vllm_ascend/models/hy_v4_flash/ihc.py
+@@ -18,6 +18,118 @@
+ logger = init_logger(__name__)
+ 
+ _PRECISE_DECODE_MEAN_GROUPS = {6: 4, 12: 8, 18: 16, 24: 8, 48: 16}
++_FUSED_PRE_CHANNELS = 4
++_FUSED_PRE_HIDDEN_SIZE = 3072
++_FUSED_PRE_MAX_TOKENS = 48
++_FUSED_PRE_QUERY_COUNT = 6
++_FUSED_PRE_GATE_BLOCK = 128
++_FUSED_PRE_WEIGHT_BLOCK = 1024
++
++
++@triton.jit
++def _ihc_pre_gate_logits_kernel(
++    mixes,
++    inverse_rms,
++    scales,
++    bias,
++    pre_logits,
++    post_logits,
++    TOKENS: tl.constexpr,
++    CHANNELS: tl.constexpr,
++    MIX_ROW_STRIDE: tl.constexpr,
++    MIX_COL_STRIDE: tl.constexpr,
++    BLOCK: tl.constexpr,
++):
++    offset = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
++    live = offset < TOKENS * CHANNELS
++    token = offset // CHANNELS
++    channel = offset % CHANNELS
++    inverse = tl.load(inverse_rms + token, live, 0.0)
++    pre = tl.load(mixes + token * MIX_ROW_STRIDE + channel * MIX_COL_STRIDE, live, 0.0)
++    post = tl.load(mixes + token * MIX_ROW_STRIDE + (CHANNELS + channel) * MIX_COL_STRIDE, live, 0.0)
++    pre_scale = tl.load(scales)
++    post_scale = tl.load(scales + 1)
++    pre_bias = tl.load(bias + channel, live, 0.0)
++    post_bias = tl.load(bias + CHANNELS + channel, live, 0.0)
++    # Keep the eager FP32 operation order; launches disable FMA contraction.
++    pre = (pre * inverse) * pre_scale + pre_bias
++    post = (post * inverse) * post_scale + post_bias
++    tl.store(pre_logits + offset, pre, live)
++    tl.store(post_logits + offset, post, live)
++
++
++@triton.jit
++def _ihc_pre_weighted_channels_kernel(
++    hidden,
++    pre_probability,
++    post_probability,
++    weighted,
++    post_gates,
++    TOKENS: tl.constexpr,
++    CHANNELS: tl.constexpr,
++    HIDDEN_SIZE: tl.constexpr,
++    MAGNITUDE: tl.constexpr,
++    EPSILON: tl.constexpr,
++    GATE_BLOCK: tl.constexpr,
++    BLOCK: tl.constexpr,
++):
++    offset = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
++    live = offset < TOKENS * CHANNELS * HIDDEN_SIZE
++    channel_row = offset // HIDDEN_SIZE
++    probability = tl.load(pre_probability + channel_row, live, 0.0)
++    value = tl.load(hidden + offset, live, 0.0).to(tl.float32)
++    tl.store(weighted + offset, (probability + EPSILON) * value, live)
++    # One program writes each post gate once, outside the hidden-width grid.
++    if tl.program_id(0) == 0:
++        gate = tl.arange(0, GATE_BLOCK)
++        gate_live = gate < TOKENS * CHANNELS
++        post_gate_probability = tl.load(post_probability + gate, gate_live, 0.0)
++        tl.store(post_gates + gate, MAGNITUDE * post_gate_probability + EPSILON, gate_live)
++
++
++def fused_ihc_pre_tail(hidden, mixes, inverse_rms, scales, bias, magnitude, epsilon):
++    """Fuse decode gate arithmetic while keeping CANN sigmoid and channel sum."""
++    tokens, channels, width = hidden.shape
++    pre_logits = torch.empty((tokens, channels), dtype=torch.float32, device=hidden.device)
++    post_logits = torch.empty_like(pre_logits)
++    _ihc_pre_gate_logits_kernel[(triton.cdiv(tokens * channels, _FUSED_PRE_GATE_BLOCK),)](
++        mixes,
++        inverse_rms,
++        scales,
++        bias,
++        pre_logits,
++        post_logits,
++        tokens,
++        channels,
++        mixes.stride(0),
++        mixes.stride(1),
++        _FUSED_PRE_GATE_BLOCK,
++        num_warps=1,
++        enable_fp_fusion=False,
++    )
++    # Preserve the original [tokens, channels] native sigmoid calls. Folding
++    # sigmoid or ReduceSum into Triton requires separate numerical validation.
++    pre_probability = pre_logits.sigmoid()
++    post_probability = post_logits.sigmoid()
++    weighted = torch.empty(hidden.shape, dtype=torch.float32, device=hidden.device)
++    post_gates = torch.empty_like(post_probability)
++    _ihc_pre_weighted_channels_kernel[(triton.cdiv(hidden.numel(), _FUSED_PRE_WEIGHT_BLOCK),)](
++        hidden,
++        pre_probability,
++        post_probability,
++        weighted,
++        post_gates,
++        tokens,
++        channels,
++        width,
++        magnitude,
++        epsilon,
++        triton.next_power_of_2(tokens * channels),
++        _FUSED_PRE_WEIGHT_BLOCK,
++        num_warps=1,
++        enable_fp_fusion=False,
++    )
++    return torch.sum(weighted, dim=1).to(hidden.dtype), post_gates
+ 
+ 
+ @triton.jit
+@@ -152,6 +264,50 @@
+     use_cann_inverse_rms = False
+     cann_pre_op = None
+     inverse_rms_workers: tuple[torch.npu.Stream, ...] = ()
++
++    def _can_fuse_decode_tail(self, x: torch.Tensor) -> bool:
++        if (
++            not HAS_TRITON
++            or not is_950()
++            or self.sequence_parallel_input
++            or x.device.type != "npu"
++            or x.dtype != torch.bfloat16
++            or x.ndim != 3
++            or not x.is_contiguous()
++            or x.shape[1:] != (_FUSED_PRE_CHANNELS, _FUSED_PRE_HIDDEN_SIZE)
++            or not 0 < x.shape[0] <= _FUSED_PRE_MAX_TOKENS
++            or x.shape[0] % _FUSED_PRE_QUERY_COUNT
++            or self.hc_mult != _FUSED_PRE_CHANNELS
++        ):
++            return False
++        weight, scales, bias = self.hc_fn.weight, self.hc_scale, self.hc_base
++        if (
++            weight.shape != (2 * _FUSED_PRE_CHANNELS, _FUSED_PRE_CHANNELS * _FUSED_PRE_HIDDEN_SIZE)
++            or scales.shape != (2,)
++            or bias.shape != (2 * _FUSED_PRE_CHANNELS,)
++            or weight.dtype != scales.dtype
++            or scales.dtype != bias.dtype
++            or bias.dtype != torch.float32
++            or weight.device != x.device
++            or scales.device != x.device
++            or bias.device != x.device
++            or not weight.is_contiguous()
++            or not scales.is_contiguous()
++            or not bias.is_contiguous()
++            or getattr(self.hc_fn, "bias", None) is not None
++        ):
++            return False
++        batch = get_flash_attention_metadata()
++        return (
++            batch is not None
++            and bool(batch.prefill_reqs)
++            and not any(batch.prefill_reqs)
++            and bool(batch.precise_decode_reqs)
++            and all(batch.precise_decode_reqs)
++            and bool(batch.query_start_loc)
++            and batch.query_start_loc[0] == 0
++            and batch.query_start_loc[-1] == x.shape[0]
++        )
+ 
+     def forward(self, x):
+         if (self.cann_pre_op is not None and not self.sequence_parallel_input
+@@ -173,6 +329,13 @@
+                     hc_eps=self.hc_eps, out_flag=0, inner_precise=0,
+                 )
+                 return hidden, post
++        if self._can_fuse_decode_tail(x):
++            flat = x.flatten(1).float()
++            inverse = self._inverse_rms(flat)
++            mixes = self.hc_fn(flat)[0]
++            return fused_ihc_pre_tail(
++                x, mixes, inverse, self.hc_scale, self.hc_base, self.magnitude, self.hc_eps
++            )
+         return super().forward(x)
+ 
+     def _inverse_rms(self, x: torch.Tensor) -> torch.Tensor:
+@@ -198,6 +361,7 @@
+     pre_layer_cls = FlashHCPreLayer
+     use_cann_prefill = False
+     cann_post_op = None
++    fuse_decode_post = True
+ 
+     def configure_prefill_post(self):
+         self.use_cann_prefill = True
+@@ -210,6 +374,11 @@
+ 
+     def configure_decode_post(self):
+         if self.enable_ihc and is_950():
++            self.fuse_decode_post = get_current_vllm_config().additional_config.get(
++                "hy4flash_fused_ihc_post", True
++            )
++            if not isinstance(self.fuse_decode_post, bool):
++                raise ValueError("hy4flash_fused_ihc_post must be a boolean")
+             self.cann_post_op = getattr(torch_npu, "npu_mhc_post", None)
+             self.hc_pre.inverse_rms_workers = _decode_mean_workers(torch.npu.current_device())
+ 
+@@ -226,6 +395,9 @@
+             and residual.is_contiguous()
+             and post_gates.is_contiguous()
+         ):
++            if not self.fuse_decode_post:
++                scaled = output_with_bias.float().unsqueeze(1) * post_gates.unsqueeze(-1)
++                return (residual.float() + scaled).to(residual.dtype)
+             if self.cann_post_op is not None and is_950():
+                 tokens, width = output_with_bias.shape if output_with_bias.ndim == 2 else (0, 0)
+                 if (
+--- a/vllm_ascend/models/hy_v4_flash/index_pool_select.py
++++ b/vllm_ascend/models/hy_v4_flash/index_pool_select.py
+@@ -9,6 +9,11 @@
+ 
+ _QUERIES = 6
+ _GROUP_TILE = 128
++_GROUP_MAJOR_TILE = 64
++_GROUP_MAJOR_HEADS = 16
++_GROUP_MAJOR_INDEX_DIM = 128
++_GROUP_MAJOR_RATIO = 4
++_GROUP_MAJOR_BUDGET = 511
+ 
+ 
+ @triton.jit
+@@ -27,6 +32,7 @@
+     RATIO: tl.constexpr,
+     BUDGET: tl.constexpr,
+     GROUP_TILE: tl.constexpr,
++    GROUP_MAJOR: tl.constexpr,
+ ):
+     qid = QUERY_START + tl.arange(0, QUERY_BLOCK)
+     q_head = QUERY_START * HEADS + tl.arange(0, QUERY_BLOCK * HEADS)
+@@ -35,9 +41,16 @@
+     # reconstructed query values, like the pooled keys, fit in BF16.
+     q = tl.load(query + q_head[:, None] * WIDTH + lane[None, :]).to(tl.bfloat16)
+     weight = tl.load(head_weight + q_head)
+-    qk = tl.dot(q, tl.trans(key), out_dtype=tl.float32)
+-    weighted = tl.maximum(qk, 0.0) * weight[:, None]
+-    score = tl.sum(weighted.reshape((QUERY_BLOCK, HEADS, GROUP_TILE)), axis=1)
++    if GROUP_MAJOR:
++        # Keep the head axis contiguous through the vector epilogue. Only the
++        # reduced [group, query] tensor is transposed for query-major stores.
++        qk = tl.dot(key, tl.trans(q), out_dtype=tl.float32)
++        weighted = tl.maximum(qk, 0.0) * weight[None, :]
++        score = tl.trans(tl.sum(weighted.reshape((GROUP_TILE, QUERY_BLOCK, HEADS)), axis=2))
++    else:
++        qk = tl.dot(q, tl.trans(key), out_dtype=tl.float32)
++        weighted = tl.maximum(qk, 0.0) * weight[:, None]
++        score = tl.sum(weighted.reshape((QUERY_BLOCK, HEADS, GROUP_TILE)), axis=1)
+     end_group = tl.load(visible + qid) // RATIO
+     recall = (end_group[:, None] > BUDGET) & (group[None, :] < end_group[:, None])
+     tl.store(
+@@ -65,6 +78,7 @@
+     GROUP_TILE: tl.constexpr,
+     QUERIES: tl.constexpr,
+     QUERY_TILE: tl.constexpr,
++    GROUP_MAJOR: tl.constexpr,
+ ):
+     start = tl.program_id(0) * GROUP_TILE
+     group = start + tl.arange(0, GROUP_TILE)
+@@ -77,12 +91,16 @@
+         live = (group < max_visible) & (group < MAX_GROUPS)
+         address = pool_key_addresses(block_table, group, lane, live, ROW_WIDTH, PAGE_SIZE, RATIO, WIDTH // RATIO)
+         key = tl.load(cache + address, live[:, None], 0)
+-        # Sharing one key tile and using 4+2 queries keeps a 128-group tile in UB.
++        # Both layouts share one key tile across the same 4+2 query split.
+         _score_query_block(
+-            query, head_weight, visible, scores, key, group, 0, 4, MAX_GROUPS, WIDTH, HEADS, RATIO, BUDGET, GROUP_TILE
++            query, head_weight, visible, scores, key, group, 0, 4, MAX_GROUPS, WIDTH, HEADS, RATIO, BUDGET,
++            GROUP_TILE,
++            GROUP_MAJOR,
+         )
+         _score_query_block(
+-            query, head_weight, visible, scores, key, group, 4, 2, MAX_GROUPS, WIDTH, HEADS, RATIO, BUDGET, GROUP_TILE
++            query, head_weight, visible, scores, key, group, 4, 2, MAX_GROUPS, WIDTH, HEADS, RATIO, BUDGET,
++            GROUP_TILE,
++            GROUP_MAJOR,
+         )
+     else:
+         tl.store(
+@@ -95,7 +113,24 @@
+ def write_pool_scores(query, weights, cache, table, visible, page_size, max_groups, ratio, budget, scores):
+     """Write one request's scores into a contiguous FP32 destination."""
+     cache = cache.view(torch.bfloat16)
+-    _score_paged_pool[(triton.cdiv(max_groups, _GROUP_TILE),)](
++    # Specialize the measured six-query/16-head path. Other shapes retain the
++    # original query-major layout and 128-group tile. The smaller group-major
++    # tile limits live key/accumulator storage without padding extra queries.
++    group_major = (
++        query.device.type == "npu"
++        and query.shape == (_QUERIES, _GROUP_MAJOR_HEADS, INDEX_DIM)
++        and weights.shape == (_QUERIES, _GROUP_MAJOR_HEADS)
++        and visible.shape == (_QUERIES,)
++        and query.is_contiguous()
++        and weights.is_contiguous()
++        and visible.is_contiguous()
++        and scores.is_contiguous()
++        and INDEX_DIM == _GROUP_MAJOR_INDEX_DIM
++        and ratio == _GROUP_MAJOR_RATIO
++        and budget == _GROUP_MAJOR_BUDGET
++    )
++    group_tile = _GROUP_MAJOR_TILE if group_major else _GROUP_TILE
++    _score_paged_pool[(triton.cdiv(max_groups, group_tile),)](
+         query,
+         weights,
+         cache,
+@@ -109,9 +144,10 @@
+         page_size,
+         ratio,
+         budget,
+-        _GROUP_TILE,
++        group_tile,
+         _QUERIES,
+         triton.next_power_of_2(_QUERIES),
++        group_major,
+         num_warps=1,
+         enable_fp_fusion=False,
+         multibuffer=False,

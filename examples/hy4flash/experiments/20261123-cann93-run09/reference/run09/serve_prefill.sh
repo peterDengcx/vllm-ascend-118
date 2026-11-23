@@ -1,0 +1,21 @@
+exec vllm serve /home/d00943518/weights/Hy4-flash-FP8 \
+  --host 127.0.0.1 \
+  --port 8100 \
+  --tensor-parallel-size 4 \
+  --data-parallel-size 1 \
+  --served-model-name hy4-flash \
+  --dtype bfloat16 \
+  --engram-config '{"cpu_offload":true,"dp_shared_memory":false}' \
+  --max-num-seqs 128 \
+  --max-model-len 131072 \
+  --max-num-batched-tokens 4096 \
+  --enable-expert-parallel \
+  --trust-remote-code \
+  --kv-cache-dtype fp8 \
+  --gpu-memory-utilization 0.85 \
+  --enable-prefix-caching \
+  --enforce-eager \
+  --seed 1024 \
+  --compilation-config '{"mode":0,"cudagraph_mode":"NONE"}' \
+  --kv-transfer-config '{"kv_connector":"MooncakeConnectorV2","kv_role":"kv_producer","kv_port":30000,"engine_id":"cann93-modified09-p","kv_connector_extra_config":{"prefill":{"tp_size":4,"dp_size":1},"decode":{"tp_size":1,"dp_size":4}}}' \
+  --additional-config '{"enable_mlapo":false,"enable_fused_mc2":0,"multistream_overlap_shared_expert":true,"ascend_compilation_config":{"enable_npugraph_ex":false}}'

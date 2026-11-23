@@ -1,0 +1,5 @@
+# Preserve measured source and evidence bytes.
+* -text
+patches/** -text -whitespace
+reference/** -text -whitespace
+results/** -text whitespace=cr-at-eol

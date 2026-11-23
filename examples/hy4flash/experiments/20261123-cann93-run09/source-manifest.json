@@ -1,0 +1,49 @@
+{
+  "upstream_repository": "ShySummer/vllm-ascend-hy4-flash",
+  "upstream_commit": "2c123f517504fa551379f7f5c7f3c4ac0e8b5686",
+  "verified_snapshot_files": 2267,
+  "changed_files": [
+    {
+      "path": "tests/ut/models/test_hy_v4_flash_dfly_dp_graph.py",
+      "base_sha256": null,
+      "run09_sha256": "6a57ad40bc2f3233949ce1873b83eb73ff9594f4617a093b96b9a3f5df732638"
+    },
+    {
+      "path": "vllm_ascend/ascend_config.py",
+      "base_sha256": "ef07b44f76296ecdfcda099a94983016f9a484890baa9a5f47f6a289eea42c22",
+      "run09_sha256": "9a68042f35038e39b867dceb2c05b13943243d2ac515baf10b1780ddb6880a90"
+    },
+    {
+      "path": "vllm_ascend/distributed/kv_transfer/utils/mooncake_transfer_engine.py",
+      "base_sha256": "2e154be541bac077fd4d5cf22fa25c89423b6e1903122537f0f05ae7945626bd",
+      "run09_sha256": "67e78f54305842ff9199c516311cb74998377f304d16a4a0f3a41d1a46c893e7"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/attention.py",
+      "base_sha256": "e7b5152e5daf9d222ab60ab1220f72855ea9c3f813dc0747821b949e22e7993b",
+      "run09_sha256": "f198be27261fe7d7584d36eec20138508cad43ce845535e3ef47bfc58d0c75de"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/dfly_speculator.py",
+      "base_sha256": "fd49d7583288fd2eb740a65060f778efc77b2cbb3e548e5ec56d9fbc27142da4",
+      "run09_sha256": "ab58cb282524aa55d59b5fa9f6477cbc1db9e485d918f376cf1815a112f04282"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/engram.py",
+      "base_sha256": "b92a412a122c9edc1aeb0f26f6d647e8d269e095c89853fa95ec58fb8cb04695",
+      "run09_sha256": "b65fcdf171c2ee72500e33bd3e31b64801e2030eb884db2bd1ef7cd4871a98f7"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/ihc.py",
+      "base_sha256": "b9cd8f62c2f076186b163e8dd58ec333706c4dc0adea89e353738e80abdbdf9e",
+      "run09_sha256": "b034c5fe4eaf560b18cfdd073bff021744ed179b683ea5b6b46820bb3fbdf164"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/index_pool_select.py",
+      "base_sha256": "d87bdc5113099ebe8da995edce82e948d64b569966355f5e42c5286b495b8773",
+      "run09_sha256": "2d104f1b581b4c983ebf434e84d71baca3e99d59dc5f80c2c47dba5ae3eaa0ae"
+    }
+  ],
+  "scope": "Exact measured Python source delta; non-Python build artifacts and external vLLM are not bundled.",
+  "full_local_archive_sha256": "7a98739d5c524cf1beed1b00ac71c3dc6effd3b78c3b4593a48bee2427035be9"
+}

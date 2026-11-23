@@ -1,0 +1,249 @@
+{
+  "valid": true,
+  "requests": 128,
+  "failed": 0,
+  "concurrency": 32,
+  "input_tokens_each": 128000,
+  "output_tokens_each": 1024,
+  "duration_seconds": 152.9642975,
+  "output_tokens_per_second": 856.8796911579973,
+  "prefix_cache": {
+    "queries": 16384000.0,
+    "hits": 14745600.0,
+    "hit_ratio": 0.9
+  },
+  "client": {
+    "ttft_ms": {
+      "n": 128,
+      "mean": 21826.69160976411,
+      "p50": 21939.049785010866,
+      "p90": 24829.49684598716,
+      "p99": 35668.51432609314,
+      "min": 5070.664759987267,
+      "max": 36979.277559992624
+    },
+    "span_ms": {
+      "n": 128,
+      "mean": 12953.15740218939,
+      "p50": 13360.426269995514,
+      "p90": 13751.465893018758,
+      "p99": 13805.713085096795,
+      "min": 9773.292400001083,
+      "max": 13808.228500012774
+    },
+    "tpot_ms": {
+      "n": 128,
+      "mean": 12.661932944466658,
+      "p50": 13.060045229712134,
+      "p90": 13.44229315055597,
+      "p99": 13.495320708794521,
+      "min": 9.553560508309953,
+      "max": 13.49777956990496
+    },
+    "e2e_ms": {
+      "n": 128,
+      "mean": 34779.8490119535,
+      "p50": 35624.05675998889,
+      "p90": 37598.38276000228,
+      "p99": 48435.41793568497,
+      "min": 14843.95715998835,
+      "max": 49749.00772998808
+    },
+    "stream_events": {
+      "n": 128,
+      "mean": 172.9921875,
+      "p50": 173.0,
+      "p90": 173.0,
+      "p99": 173.0,
+      "min": 172,
+      "max": 173
+    }
+  },
+  "itl_ms": {
+    "n": 22015,
+    "mean": 75.3124754703721,
+    "p50": 80.79567001550458,
+    "p90": 81.70670599211007,
+    "p99": 84.71373199601668,
+    "min": 0.026730005629360676,
+    "max": 172.50184001750313
+  },
+  "server": {
+    "P": {
+      "request_decode_time_seconds": {
+        "sum": 0.0,
+        "count": 128.0,
+        "mean": 0.0
+      },
+      "request_prefill_time_seconds": {
+        "sum": 228.34949621997657,
+        "count": 128.0,
+        "mean": 1.783980439218567
+      },
+      "request_queue_time_seconds": {
+        "sum": 2379.6259394999943,
+        "count": 128.0,
+        "mean": 18.590827652343705
+      },
+      "e2e_request_latency_seconds": {
+        "sum": 2701.023142337799,
+        "count": 128.0,
+        "mean": 21.101743299514055
+      },
+      "time_to_first_token_seconds": {
+        "sum": 2701.023142337799,
+        "count": 128.0,
+        "mean": 21.101743299514055
+      },
+      "inter_token_latency_seconds": {
+        "sum": 0.0,
+        "count": 0.0,
+        "mean": null
+      },
+      "drafts": 0,
+      "draft_tokens": 0,
+      "accepted_tokens": 0,
+      "preemptions": 0.0,
+      "generated_tokens": 128.0,
+      "acceptance": null
+    },
+    "D": {
+      "request_decode_time_seconds": {
+        "sum": 1664.0664885300503,
+        "count": 128.0,
+        "mean": 13.000519441641018
+      },
+      "request_prefill_time_seconds": {
+        "sum": 21.270960079767974,
+        "count": 128.0,
+        "mean": 0.1661793756231873
+      },
+      "request_queue_time_seconds": {
+        "sum": 34.230637740169186,
+        "count": 128.0,
+        "mean": 0.26742685734507177
+      },
+      "e2e_request_latency_seconds": {
+        "sum": 1742.1990704536438,
+        "count": 128.0,
+        "mean": 13.610930237919092
+      },
+      "time_to_first_token_seconds": {
+        "sum": 78.07080936431885,
+        "count": 128.0,
+        "mean": 0.609928198158741
+      },
+      "inter_token_latency_seconds": {
+        "sum": 1664.0664885300503,
+        "count": 21888.0,
+        "mean": 0.07602642948328081
+      },
+      "drafts": 22016.0,
+      "draft_tokens": 110080.0,
+      "accepted_tokens": 109440.0,
+      "preemptions": 0.0,
+      "generated_tokens": 131072.0,
+      "acceptance": 0.9941860465116279
+    }
+  },
+  "aisbench_latency": {
+    "E2EL": {
+      "Performance Parameters": "E2EL",
+      "Stage": "total",
+      "Average": "34779.8 ms",
+      "Min": "14844.0 ms",
+      "Max": "49749.0 ms",
+      "Median": "35624.1 ms",
+      "P75": "36300.2 ms",
+      "P90": "37598.4 ms",
+      "P99": "48435.4 ms",
+      "N": "128"
+    },
+    "TTFT": {
+      "Performance Parameters": "TTFT",
+      "Stage": "total",
+      "Average": "21826.7 ms",
+      "Min": "5070.7 ms",
+      "Max": "36979.3 ms",
+      "Median": "21939.0 ms",
+      "P75": "22902.9 ms",
+      "P90": "24829.5 ms",
+      "P99": "35668.5 ms",
+      "N": "128"
+    },
+    "TPOT": {
+      "Performance Parameters": "TPOT",
+      "Stage": "total",
+      "Average": "12.7 ms",
+      "Min": "9.6 ms",
+      "Max": "13.5 ms",
+      "Median": "13.1 ms",
+      "P75": "13.4 ms",
+      "P90": "13.4 ms",
+      "P99": "13.5 ms",
+      "N": "128"
+    },
+    "ITL": {
+      "Performance Parameters": "ITL",
+      "Stage": "total",
+      "Average": "75.3 ms",
+      "Min": "0.0 ms",
+      "Max": "172.5 ms",
+      "Median": "80.8 ms",
+      "P75": "81.2 ms",
+      "P90": "81.7 ms",
+      "P99": "84.7 ms",
+      "N": "128"
+    },
+    "InputTokens": {
+      "Performance Parameters": "InputTokens",
+      "Stage": "total",
+      "Average": "128000.0",
+      "Min": "128000.0",
+      "Max": "128000.0",
+      "Median": "128000.0",
+      "P75": "128000.0",
+      "P90": "128000.0",
+      "P99": "128000.0",
+      "N": "128"
+    },
+    "OutputTokens": {
+      "Performance Parameters": "OutputTokens",
+      "Stage": "total",
+      "Average": "1024.0",
+      "Min": "1024.0",
+      "Max": "1024.0",
+      "Median": "1024.0",
+      "P75": "1024.0",
+      "P90": "1024.0",
+      "P99": "1024.0",
+      "N": "128"
+    },
+    "OutputTokenThroughput": {
+      "Performance Parameters": "OutputTokenThroughput",
+      "Stage": "total",
+      "Average": "30.6601 token/s",
+      "Min": "20.5833 token/s",
+      "Max": "68.9843 token/s",
+      "Median": "28.7446 token/s",
+      "P75": "29.0499 token/s",
+      "P90": "35.6704 token/s",
+      "P99": "64.6926 token/s",
+      "N": "128"
+    },
+    "PrefillTokenThroughput": {
+      "Performance Parameters": "PrefillTokenThroughput",
+      "Stage": "total",
+      "Average": "6532.8234 token/s",
+      "Min": "3461.3981 token/s",
+      "Max": "25243.2385 token/s",
+      "Median": "5834.3457 token/s",
+      "P75": "5928.0845 token/s",
+      "P90": "7522.0961 token/s",
+      "P99": "22251.2968 token/s",
+      "N": "128"
+    }
+  },
+  "source": "CANN9.3 native operators plus modified HY4 decode paths",
+  "comparability": "One modified run; historical CANN9.1 differences cannot be attributed to C8 alone."
+}

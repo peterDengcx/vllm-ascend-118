@@ -1,0 +1,22 @@
+exec vllm serve /home/d00943518/weights/Hy4-flash-FP8 \
+  --host 127.0.0.1 \
+  --port 8200 \
+  --tensor-parallel-size 1 \
+  --data-parallel-size 4 \
+  --data-parallel-rpc-port 13445 \
+  --served-model-name hy4-flash \
+  --dtype bfloat16 \
+  --engram-config '{"cpu_offload":true,"dp_shared_memory":true}' \
+  --max-num-seqs 128 \
+  --max-model-len 131072 \
+  --max-num-batched-tokens 4096 \
+  --enable-expert-parallel \
+  --trust-remote-code \
+  --kv-cache-dtype fp8 \
+  --gpu-memory-utilization 0.85 \
+  --enable-prefix-caching \
+  --seed 1024 \
+  --compilation-config '{"mode":0,"cudagraph_mode":"FULL_DECODE_ONLY","decode_cudagraph_capture_request_sizes":[1,2,3,4,5,6,7,8,16,32,64,128],"max_decode_cudagraph_capture_tokens":512}' \
+  --speculative-config '{"method":"dfly","num_speculative_tokens":5,"draft_tensor_parallel_size":1}' \
+  --kv-transfer-config '{"kv_connector":"MooncakeConnectorV2","kv_role":"kv_consumer","kv_port":30100,"engine_id":"cann93-modified09-d","kv_connector_extra_config":{"prefill":{"tp_size":4,"dp_size":1},"decode":{"tp_size":1,"dp_size":4}}}' \
+  --additional-config '{"hy4flash_cann_engram_rms":true,"hy4flash_dfly_dp_graph":false,"hy4flash_fused_ihc_post":true,"hy4flash_bulk_c8_decode_reads":true,"enable_mlapo":false,"enable_fused_mc2":0,"multistream_overlap_shared_expert":true,"ascend_compilation_config":{"enable_npugraph_ex":false}}'
