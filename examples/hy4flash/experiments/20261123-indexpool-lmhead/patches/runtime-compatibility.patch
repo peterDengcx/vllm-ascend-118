@@ -1,0 +1,150 @@
+--- a/vllm_ascend/quantization/methods/w8a8/w8a8_mxfp8.py
++++ b/vllm_ascend/quantization/methods/w8a8/w8a8_mxfp8.py
+@@ -15,6 +15,7 @@
+ # limitations under the License.
+ #
+ 
++import os
+ from typing import Any
+ 
+ import torch
+@@ -377,7 +378,10 @@
+         self._dynamic_mx_quant_scale_alg = get_dynamic_mx_quant_scale_alg(vllm_config)
+         model_config = getattr(vllm_config, "model_config", None)
+         text_config = getattr(model_config, "hf_text_config", None)
+-        self.fused_clamped_silu = getattr(text_config, "model_type", None) == "hy_v4_flash"
++        self.fused_clamped_silu = (
++            getattr(text_config, "model_type", None) == "hy_v4_flash"
++            and os.environ.get("HY4_UNFUSED_CLAMPED_SWIGLU") != "1"
++        )
+ 
+     def supports_fused_activation(self, activation: MoEActivation) -> bool:
+         # Only MiniMax's A5 CEIL-scale MXFP8 path has been validated with the
+--- a/vllm_ascend/models/hy_v4_flash/c8_kvqsfa.py
++++ b/vllm_ascend/models/hy_v4_flash/c8_kvqsfa.py
+@@ -8,6 +8,34 @@
+ 
+ from vllm_ascend.device.device_config import is_950
+ from vllm_ascend.hisparse.c8 import C8_ROW_BYTES, dequantize_c8_rows
++
++
++def _kv_quant_sparse_flash_attention_with_sink(
++    query, key, value, sparse_indices, scale, key_quant_mode, value_quant_mode, *, sinks, **kwargs
++):
++    # The installed CANN Python package lacks the newer sink-aware wrapper.
++    # Its existing vLLM custom operator returns partial output plus max/sum;
++    # merge the model's zero-value sink into that softmax exactly.
++    import vllm_ascend.vllm_ascend_C  # noqa: F401
++
++    partial, softmax_max, softmax_sum = (
++        torch.ops._C_ascend.npu_kv_quant_sparse_flash_attention_vllm(
++            query, key, value, sparse_indices, scale,
++            key_quant_mode=key_quant_mode,
++            value_quant_mode=value_quant_mode,
++            return_softmax_lse=True,
++            **kwargs,
++        )
++    )
++    tokens = query.shape[-3] if query.ndim == 4 else query.shape[0]
++    heads = query.shape[-2]
++    lse = softmax_max.float() + softmax_sum.float().clamp_min(1e-30).log()
++    weight = torch.sigmoid(lse.reshape(tokens, heads) - sinks.float())
++    if query.ndim == 4:
++        weight = weight.reshape(1, tokens, heads, 1)
++    else:
++        weight = weight.unsqueeze(-1)
++    return (partial.float() * weight).to(partial.dtype), softmax_max, softmax_sum
+ 
+ 
+ def _pack_c8_pages(cache, block_table, block_size, num_pages):
+@@ -31,7 +59,7 @@
+         context.append(attend_early(query[:compact_prefix], packed, selected[:compact_prefix],
+                                     early_kv_len, sink.contiguous(), scale))
+     if compact_prefix < query.size(0):
+-        from cann_ops_transformer import kv_quant_sparse_flash_attention
++        kv_quant_sparse_flash_attention = _kv_quant_sparse_flash_attention_with_sink
+ 
+         query = query[compact_prefix:].contiguous()
+         indices = selected[compact_prefix:].to(torch.int32).unsqueeze(1).contiguous()
+--- a/vllm_ascend/models/hy_v4_flash/engram.py
++++ b/vllm_ascend/models/hy_v4_flash/engram.py
+@@ -1,6 +1,8 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ """HYV4 Flash Engram with request-local n-grams and TP-sharded row storage."""
++
++import os
+ 
+ import numpy as np
+ import torch
+@@ -197,9 +199,14 @@
+ 
+     def _allocate_storage(self, shape, dtype, leaf):
+         if self._shared_group is not None and shape[0]:
+-            from vllm_ascend.models.deepseek_v41.engram.npu import SharedUvaBuffer
+-
+-            buffer = SharedUvaBuffer(shape, dtype, torch.device("npu", torch.npu.current_device()), self._shared_group)
++            if os.environ.get("HY4_DFLY_PAGEABLE_ENGRAM") == "1":
++                from pageable_engram_probe import PageableEngramBuffer
++
++                buffer = PageableEngramBuffer(shape, dtype, self._shared_group)
++            else:
++                from vllm_ascend.models.deepseek_v41.engram.npu import SharedUvaBuffer
++
++                buffer = SharedUvaBuffer(shape, dtype, torch.device("npu", torch.npu.current_device()), self._shared_group)
+             self._shared_buffers[leaf] = buffer
+             logger.info(
+                 "HYV4 Flash Engram DP shared table: dp_rank=%d tp_rank=%d field=%s rows=%d bytes=%d backing=%s",
+@@ -214,7 +221,7 @@
+         parameter = getattr(self.embedding, leaf, None)
+         storage = {"device": parameter.device} if parameter is not None else {}
+         if self.cpu_offload:
+-            storage = {"device": "cpu", "pin_memory": True}
++            storage = {"device": "cpu", "pin_memory": os.environ.get("HY4_DFLY_PAGEABLE_ENGRAM") != "1"}
+         return torch.empty(shape, dtype=dtype, **storage)
+ 
+     def _copy_shared_weight(self, parameter, shard):
+--- a/vllm_ascend/models/hy_v4_flash/li_prefill_p0.py
++++ b/vllm_ascend/models/hy_v4_flash/li_prefill_p0.py
+@@ -16,11 +16,15 @@
+ HEADS = 16
+ DIM = 128
+ LAYOUT = "BSND"
++# Task-local compatibility: CANN 9.1.0 has no Ascend950 LightningIndexerV2 binary.
++# Keep the caller's existing sparse_candidates fallback until that binary is installed.
++CANN_LIGHTNING_INDEXER_V2_AVAILABLE = False
+ 
+ 
+ def eligible(query, weights, pool, visible_len, chunk, ratio, budget):
+     return (
+-        ratio == RATIO
++        CANN_LIGHTNING_INDEXER_V2_AVAILABLE
++        and ratio == RATIO
+         and budget == BUDGET
+         and chunk == 16
+         and visible_len - chunk >= (BUDGET + 1) * RATIO
+--- a/vllm_ascend/models/hy_v4_flash/ihc.py
++++ b/vllm_ascend/models/hy_v4_flash/ihc.py
+@@ -203,14 +203,18 @@
+         self.use_cann_prefill = True
+         if self.enable_ihc:
+             self.hc_pre.use_cann_inverse_rms = is_950() and hasattr(torch_npu, "npu_rms_norm")
+-            if is_950() and get_current_vllm_config().model_config.enforce_eager:
+-                self.hc_pre.cann_pre_op = getattr(torch_npu, "npu_mhc_pre", None)
++            # Current image lacks the inner_precise API required by upstream.
++            self.hc_pre.cann_pre_op = None
+         if self.enable_ihc and is_950():
+-            self.cann_post_op = getattr(torch_npu, "npu_mhc_post", None)
++            # Current image rejects null hRes; retain the equivalent reference path.
++            self.use_cann_prefill = True
++            self.cann_post_op = None
+ 
+     def configure_decode_post(self):
+         if self.enable_ihc and is_950():
+-            self.cann_post_op = getattr(torch_npu, "npu_mhc_post", None)
++            # Current image rejects null hRes; retain the equivalent reference path.
++            self.use_cann_prefill = True
++            self.cann_post_op = None
+             self.hc_pre.inverse_rms_workers = _decode_mean_workers(torch.npu.current_device())
+ 
+     def post(self, output_with_bias, residual, post_gates):

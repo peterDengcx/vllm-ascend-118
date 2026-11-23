@@ -1,0 +1,192 @@
+--- a/overlay/vllm/model_executor/layers/logits_processor.py
++++ b/overlay/vllm/model_executor/layers/logits_processor.py
+@@ -171,9 +171,21 @@
+             if embedding_bias is not None:
+                 logits = logits + embedding_bias.to(self.head_dtype)
+             return logits.reshape(*hidden_states.shape[:-1], -1)
++        # Models may prepare a shared FP32 head in their post-load hook. Keeping
++        # it on lm_head lets target and draft processors reuse the same tensor.
++        weight = lm_head.weight
++        cached_weight = getattr(lm_head, "_cached_fp32_weight", None)
++        if (
++            self.head_dtype == torch.float32
++            and cached_weight is not None
++            and cached_weight.dtype == self.head_dtype
++            and cached_weight.device == weight.device
++            and cached_weight.shape == weight.shape
++        ):
++            weight = cached_weight
+         return F.linear(
+             hidden_states.to(self.head_dtype),
+-            lm_head.weight.to(self.head_dtype),
++            weight.to(self.head_dtype),
+             embedding_bias.to(self.head_dtype) if embedding_bias is not None else None,
+         )
+ 
+--- a/overlay/vllm_ascend/models/hy_v4_flash/aclgraph.py
++++ b/overlay/vllm_ascend/models/hy_v4_flash/aclgraph.py
+@@ -10,6 +10,70 @@
+ 
+ 
+ class FlashAclGraphManager(ModelAclGraphManager):
++    def __init__(self, *args, **kwargs):
++        super().__init__(*args, **kwargs)
++        self._short_indexpool_graphs = {}
++        self._short_indexpool_limit = None
++
++    def release_graphs(self):
++        self._short_indexpool_graphs.clear()
++        self._short_indexpool_limit = None
++        super().release_graphs()
++
++    def capture(self, model, *args, **kwargs):
++        # Both variants use the same descriptors, communication order, output
++        # buffers and graph pool. Only local IndexPool retrieval is omitted.
++        self._short_indexpool_graphs.clear()
++        self._short_indexpool_limit = None
++        super().capture(model, *args, **kwargs)
++        layers = [
++            layer for layer in model.modules()
++            if getattr(layer, "context_aware_indexpool", False)
++            and getattr(layer, "indexer", None) is not None
++            and layer.max_model_len > (layer.indexer.budget + 1) * layer.indexer.ratio
++        ]
++        if not layers or not self.graphs:
++            return
++        long_graphs = self.graphs
++        self.graphs = {}
++        try:
++            for layer in layers:
++                layer._short_indexpool_capture = True
++            super().capture(model, *args, **kwargs)
++            self._short_indexpool_graphs = self.graphs
++            self._short_indexpool_limit = min(
++                (layer.indexer.budget + 1) * layer.indexer.ratio for layer in layers
++            )
++        finally:
++            self.graphs = long_graphs
++            for layer in layers:
++                layer._short_indexpool_capture = False
++        logger.info(
++            "HY4_INDEXPOOL_CONTEXT_AWARE captured %d short-context graphs; sequence-length upper bound <= %d.",
++            len(self._short_indexpool_graphs), self._short_indexpool_limit,
++        )
++
++    def _use_short_indexpool(self, desc):
++        if desc not in self._short_indexpool_graphs or self._short_indexpool_limit is None:
++            return False
++        metadata = self.model_runner.model_state.attn_metadata
++        if not isinstance(metadata, dict) or not metadata:
++            return False
++        # FlashMetadataBuilder copies the runner's CPU sequence-length upper
++        # bounds. A mixed/long batch or unknown metadata keeps the long graph.
++        seen = set()
++        for meta in metadata.values():
++            if id(meta) in seen:
++                continue
++            seen.add(id(meta))
++            lengths = getattr(meta, "seq_lens", None)
++            if not isinstance(lengths, tuple) or not lengths or any(
++                not isinstance(length, int) or length < 0 or length > self._short_indexpool_limit
++                for length in lengths
++            ):
++                return False
++        return True
++
+     def _init_candidates(self):
+         super()._init_candidates()
+         decode_graphs = [
+@@ -36,7 +100,16 @@
+         )
+ 
+     def run_fullgraph(self, desc):
+-        output = super().run_fullgraph(desc)
++        graphs = self.graphs
++        use_short = self._use_short_indexpool(desc)
++        try:
++            if use_short:
++                self.graphs = self._short_indexpool_graphs
++            output = super().run_fullgraph(desc)
++        finally:
++            self.graphs = graphs
++        if use_short:
++            logger.info_once("HY4_INDEXPOOL_CONTEXT_AWARE short-context FULL graph replay is active.")
+         logger.info_once(
+             "FULL ACLGraph replay is active for HYV4 Flash target (%d requests, %d query tokens).",
+             desc.num_reqs,
+--- a/overlay/vllm_ascend/models/hy_v4_flash/attention.py
++++ b/overlay/vllm_ascend/models/hy_v4_flash/attention.py
+@@ -299,6 +299,8 @@
+         self.is_window_layer = config.layer_types[layer_idx] == SLIDING_ATTENTION
+         self.window = config.sliding_window
+         self.max_model_len = vllm_config.model_config.max_model_len
++        self.context_aware_indexpool = not reuse_target and os.environ.get("HY4_INDEXPOOL_CONTEXT_AWARE", "1") == "1"
++        self._short_indexpool_capture = False
+         dim_prefix = "swa_" if self.is_window_layer else ""
+         heads = getattr(config, f"{dim_prefix}num_attention_heads")
+         self.local_heads = heads // get_tensor_model_parallel_world_size()
+@@ -1003,7 +1005,7 @@
+             out[:num_tokens].masked_fill_(~live.reshape(-1, 1), 0)
+             return
+ 
+-        score_groups = self.indexer is not None and self.max_model_len > (self.indexer.budget + 1) * self.indexer.ratio
++        score_groups = self.indexer is not None and self.max_model_len > (self.indexer.budget + 1) * self.indexer.ratio and not self._short_indexpool_capture
+         use_paged_pool = False
+         if score_groups:
+             index_query, index_weight = self.indexer.encode_queries(
+@@ -1087,7 +1089,8 @@
+                     dense = self._dense_decode_candidates(visible, selected.shape[-1])
+                     selected = torch.where((visible // ratio > self.indexer.budget)[:, None], selected, dense)
+                 else:
+-                    selected = self._dense_decode_candidates(visible, self.max_model_len)
++                    width = min(self.max_model_len, (self.indexer.budget + 1) * self.indexer.ratio)
++                    selected = self._dense_decode_candidates(visible, width)
+             if snapshot is not None:
+                 snapshot[start:stop, : selected.shape[-1]].copy_(selected)
+             if batch_sparse:
+--- a/overlay/vllm_ascend/models/hy_v4_flash/model.py
++++ b/overlay/vllm_ascend/models/hy_v4_flash/model.py
+@@ -1,9 +1,14 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++
++import os
+ 
+ import torch
+ from vllm.config import CUDAGraphMode, VllmConfig
+ from vllm.distributed import get_ep_group, get_tp_group
++from vllm.logger import init_logger
++from vllm.model_executor.layers.linear import UnquantizedLinearMethod
++from vllm.model_executor.layers.vocab_parallel_embedding import UnquantizedEmbeddingMethod
+ from vllm.models.hy_v4_flash.model import HYV4FlashDecoderLayer, HYV4FlashForCausalLM, HYV4FlashModel
+ 
+ from vllm_ascend.ascend_config import get_ascend_config
+@@ -190,6 +195,28 @@
+             and is_950()
+         )
+ 
++    def process_weights_after_loading(self) -> None:
++        # The loader calls this after weight processing and on reloads. Allocate
++        # before memory profiling so the persistent copy is included in the KV
++        # cache budget, and discard the old copy before rebuilding on a reload.
++        head = self.lm_head
++        head.register_buffer("_cached_fp32_weight", None, persistent=False)
++        if (
++            os.environ.get("HY4_CACHE_FP32_LM_HEAD", "1") == "1"
++            and self.logits_processor.head_dtype == torch.float32
++            and isinstance(head.quant_method, (UnquantizedEmbeddingMethod, UnquantizedLinearMethod))
++            and head.weight.dtype != torch.float32
++        ):
++            # Keep the original BF16 parameter for embedding/weight tying. The
++            # target and DFly both use this head and share one FP32 copy.
++            with torch.no_grad():
++                head._cached_fp32_weight = head.weight.detach().to(torch.float32)
++            init_logger(__name__).info(
++                "HY4_CACHE_FP32_LM_HEAD prepared shared FP32 weight: shape=%s device=%s bytes=%d",
++                tuple(head.weight.shape), head.weight.device,
++                head._cached_fp32_weight.numel() * head._cached_fp32_weight.element_size(),
++            )
++
+     @staticmethod
+     def get_model_state_cls():
+         from .model_state import FlashModelState

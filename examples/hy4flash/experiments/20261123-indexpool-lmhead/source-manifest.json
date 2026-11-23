@@ -1,0 +1,50 @@
+{
+  "upstream_repository": "ShySummer/vllm-ascend-hy4-flash",
+  "upstream_commit": "2c123f517504fa551379f7f5c7f3c4ac0e8b5686",
+  "source_hardware": "Ascend950PR",
+  "target_retest_hardware": "650E",
+  "retest_status": "not_run",
+  "merge_allowed": false,
+  "files": [
+    {
+      "path": "patches/indexpool-lmhead.patch",
+      "sha256": "7b08648b1aab1ba0f238678b8dc157ebc4d673613cce273735b4f55fe070b212",
+      "role": "as-run experiment source"
+    },
+    {
+      "path": "patches/runtime-compatibility.patch",
+      "sha256": "673926b25635ea9975acf6073288212706eb4340534e3dd87099a44632651ae4",
+      "role": "as-run experiment source"
+    },
+    {
+      "path": "reference/collect_results.py",
+      "sha256": "c5899d3f8987bf1b9b0877db69ff8fe6aa7dab2c76c1449ec8c279bf4511b65a",
+      "role": "as-run experiment source"
+    },
+    {
+      "path": "reference/make_payload.py",
+      "sha256": "0c1391b17b7a2e1d84257bae3297ce73aaf0dabbaf360c2ae264d999603591c6",
+      "role": "as-run experiment source"
+    },
+    {
+      "path": "reference/run_pair.py",
+      "sha256": "b8a26a301fa9878ac27bbeccefd4decd238d24c34186729cf2dbc4768c3fa892",
+      "role": "as-run experiment source"
+    },
+    {
+      "path": "reference/run_profile.py",
+      "sha256": "d2593021ed275e362ffa65dce7cde20a2b72543cc1f05cdde46b67e9962cf3f9",
+      "role": "as-run experiment source"
+    },
+    {
+      "path": "reference/prepare_profile.py",
+      "sha256": "b0fd2e992e1287ad636e34d857afaf7098c219c0a032815d58c9cd0152c3f28f",
+      "role": "as-run experiment source"
+    },
+    {
+      "path": "reference/finalize_profile.py",
+      "sha256": "413d8545e90f09896f35b529e488617d07a5c3e68e10267711e14ead79b597fd",
+      "role": "as-run experiment source"
+    }
+  ]
+}
