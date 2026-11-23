@@ -1,2 +1,7 @@
 # Unified-diff context lines deliberately contain a single space.
 patches/*.patch -whitespace
+# Preserve byte hashes of the archived sources and measured evidence.
+patches/*.patch -text
+reference/*.py -text
+results/** -text
+profiling/** -text
