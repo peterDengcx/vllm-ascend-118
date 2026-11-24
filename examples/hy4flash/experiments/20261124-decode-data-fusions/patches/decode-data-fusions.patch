@@ -1,0 +1,364 @@
+--- a/vllm_ascend/models/hy_v4_flash/attention.py
++++ b/vllm_ascend/models/hy_v4_flash/attention.py
+@@ -407,6 +407,8 @@
+         self.native_decode_attention = not reuse_target and uses_decode_fusions(
+             vllm_config
+         )
++        data_fusions = vllm_config.additional_config.get("hy4flash_decode_data_fusions", True)
++        self.decode_data_fusions = data_fusions and self.native_decode_attention and HAS_TRITON
+         self.bulk_c8_decode_reads = True
+         self.ops = triton_ops
+         if self.use_cann_prefill:
+@@ -923,13 +925,16 @@
+             ratio = self.indexer.ratio
+             groups = seq_len // ratio
+             pool = torch.empty(
+-                (groups, INDEX_DIM), dtype=torch.float32, device=query.device
++                (groups, INDEX_DIM),
++                dtype=torch.bfloat16 if self.decode_data_fusions else torch.float32,
++                device=query.device,
+             )
+             self.ops.copy_pool_keys(
+                 cache, table, pool, 0, block_size, ratio, write=False
+             )
+             selected = native_indexpool_select(
+-                index_query[start:stop], index_weight[start:stop], pool, visible
++                index_query[start:stop], index_weight[start:stop], pool, visible,
++                fuse_postprocess=self.decode_data_fusions,
+             )
+             dense = self._dense_decode_candidates(visible, selected.shape[-1])
+             selected = torch.where(
+@@ -940,9 +945,14 @@
+             selected = self._dense_decode_candidates(visible, width)
+         if self.topk_snapshot is not None:
+             self.topk_snapshot[start:stop, : selected.shape[-1]].copy_(selected)
+-        rows = self._gather_attention_rows(
+-            cache, table, block_size, selected, mask_padding=True
+-        )
++        if self._can_gather_decode_fia_rows(cache, query.dtype):
++            from .c8_read import gather_c8_fia_rows
++
++            rows = gather_c8_fia_rows(cache, table, block_size, selected)
++        else:
++            rows = self._gather_attention_rows(
++                cache, table, block_size, selected, mask_padding=True
++            )
+         context = native_mla_context(
+             query[start:stop], selected, rows, self.learnable_sink_param, self.scale
+         )
+@@ -1412,22 +1422,37 @@
+             selected, window_rows = selection
+             if snapshot is not None:
+                 snapshot[:num_tokens, :window].copy_(selected)
+-            rows = torch.empty(
+-                (num_tokens, window, query.shape[-1]),
+-                dtype=torch.float32,
+-                device=query.device,
+-            )
+-            for request in range(batch_size):
+-                history = self._gather_attention_rows(
+-                    cache,
+-                    meta.block_table[request],
+-                    block_size,
+-                    shared_positions[request],
+-                    mask_padding=True,
+-                )
+-                start = request * num_queries
+-                target = rows[start : start + num_queries].view(-1, rows.shape[-1])
+-                torch.index_select(history, 0, window_rows, out=target)
++            direct_fia = self._can_gather_decode_fia_rows(
++                cache, query.dtype
++            )
++            if direct_fia:
++                from .c8_read import empty_c8_fia_rows, gather_c8_fia_rows
++
++                rows = empty_c8_fia_rows(num_tokens, window, query.device)
++                for request in range(batch_size):
++                    start = request * num_queries
++                    stop = start + num_queries
++                    gather_c8_fia_rows(
++                        cache, meta.block_table[request], block_size, selected[start:stop],
++                        output=tuple(tensor[start:stop] for tensor in rows),
++                    )
++            else:
++                rows = torch.empty(
++                    (num_tokens, window, query.shape[-1]),
++                    dtype=torch.float32,
++                    device=query.device,
++                )
++                for request in range(batch_size):
++                    history = self._gather_attention_rows(
++                        cache,
++                        meta.block_table[request],
++                        block_size,
++                        shared_positions[request],
++                        mask_padding=True,
++                    )
++                    start = request * num_queries
++                    target = rows[start : start + num_queries].view(-1, rows.shape[-1])
++                    torch.index_select(history, 0, window_rows, out=target)
+             self._attend_decoded(query, selected, rows, wv, out[:num_tokens])
+             out[:num_tokens].masked_fill_(~live.reshape(-1, 1), 0)
+             return
+@@ -1527,6 +1552,7 @@
+                         pool,
+                         visible,
+                         selection_state,
++                        fuse_postprocess=self.decode_data_fusions,
+                     )
+                     candidate_key = ("dense_candidates", selected.shape[-1])
+                     dense = geometry.get(candidate_key)
+@@ -1562,7 +1588,11 @@
+                 sparse_selected.append(selected)
+                 continue
+             q = query[start:stop]
+-            if shared_positions is None:
++            if self._can_gather_decode_fia_rows(cache, q.dtype):
++                from .c8_read import gather_c8_fia_rows
++
++                rows = gather_c8_fia_rows(cache, table, block_size, selected)
++            elif shared_positions is None:
+                 rows = self._gather_attention_rows(
+                     cache, table, block_size, selected, mask_padding=True
+                 )
+@@ -1581,19 +1611,31 @@
+                 "HYV4 Flash gathers sparse Decode C8 cache rows for the whole rank with CANN."
+             )
+             selected = torch.stack(sparse_selected)
+-            logical = selected.clamp_min(0).flatten(1)
+-            packed = self._gather(
+-                cache,
+-                meta.block_table[:batch_size],
+-                block_size,
+-                logical,
+-                slice(self.kv_storage_width),
+-            )
+             selected = selected.flatten(0, 1)
+-            rows = dequantize_c8_rows(packed).view(
+-                num_tokens, selected.shape[-1], query.shape[-1]
+-            )
+-            rows = rows.masked_fill(selected[..., None] < 0, 0)
++            if self._can_gather_decode_fia_rows(cache, query.dtype):
++                from .c8_read import empty_c8_fia_rows, gather_c8_fia_rows
++
++                rows = empty_c8_fia_rows(num_tokens, selected.shape[-1], query.device)
++                for request in range(batch_size):
++                    start = request * num_queries
++                    stop = start + num_queries
++                    gather_c8_fia_rows(
++                        cache, meta.block_table[request], block_size, selected[start:stop],
++                        output=tuple(tensor[start:stop] for tensor in rows),
++                    )
++            else:
++                logical = selected.view(batch_size, -1).clamp_min(0)
++                packed = self._gather(
++                    cache,
++                    meta.block_table[:batch_size],
++                    block_size,
++                    logical,
++                    slice(self.kv_storage_width),
++                )
++                rows = dequantize_c8_rows(packed).view(
++                    num_tokens, selected.shape[-1], query.shape[-1]
++                )
++                rows = rows.masked_fill(selected[..., None] < 0, 0)
+             self._attend_decoded(query, selected, rows, wv, out[:num_tokens])
+         if shared_positions is not None:
+             # Inactive queries may overlap live KV rows in the unfolded view.
+@@ -1630,7 +1672,9 @@
+         end = seq_len // ratio
+         if self.incremental_index_pool:
+             keys = torch.empty(
+-                (groups, INDEX_DIM), dtype=torch.float32, device=cache.device
++                (groups, INDEX_DIM),
++                dtype=torch.bfloat16 if self.decode_data_fusions else torch.float32,
++                device=cache.device,
+             )
+             self.ops.copy_pool_keys(
+                 cache, table, keys, 0, block_size, ratio, write=False, end_group=end
+@@ -1642,6 +1686,16 @@
+             cache, table, block_size, history, position_ndim
+         )
+         return self.indexer.encode_keys(raw, key_pos, full_graph=True)
++
++    def _can_gather_decode_fia_rows(self, cache, output_dtype):
++        return (
++            self.decode_data_fusions
++            and self.fuse_c8_qk
++            and output_dtype == torch.bfloat16
++            and cache.is_contiguous()
++            and cache.shape[-1] % torch.int32.itemsize == 0
++            and cache.storage_offset() % torch.int32.itemsize == 0
++        )
+ 
+     def _gather_attention_rows(
+         self, cache, block_table, block_size, positions, *, mask_padding=False
+--- a/vllm_ascend/models/hy_v4_flash/decode_fusions.py
++++ b/vllm_ascend/models/hy_v4_flash/decode_fusions.py
+@@ -34,10 +34,14 @@
+ 
+ def native_mla_context(query, selected, kv, sink, scale):
+     """FIA owns QK/masking/softmax/PV; retain the FP32 sink using its LSE."""
+-    keys = kv.to(query.dtype).unsqueeze(2)
+-    nope = keys[..., :512].contiguous()
+-    rope = keys[..., 512:].contiguous()
+-    mask = (selected < 0)[:, None, None, :].contiguous()
++    if isinstance(kv, tuple):
++        # The C8 reader has already materialized the exact FIA input layouts.
++        nope, rope, mask = kv
++    else:
++        keys = kv.to(query.dtype).unsqueeze(2)
++        nope = keys[..., :512].contiguous()
++        rope = keys[..., 512:].contiguous()
++        mask = (selected < 0)[:, None, None, :].contiguous()
+     output, lse = torch_npu.npu_fused_infer_attention_score_v2(
+         query[..., :512].unsqueeze(1).contiguous(),
+         nope,
+@@ -98,7 +102,7 @@
+     return used, residual, metadata, cutoff, offsets
+ 
+ 
+-def native_indexpool_select(query, weights, pool, visible, selection_state=None):
++def native_indexpool_select(query, weights, pool, visible, selection_state=None, *, fuse_postprocess=False):
+     """Score layer-specific keys using the shared selection geometry."""
+     ratio, budget = 4, 511
+     if selection_state is None:
+@@ -122,6 +126,10 @@
+         return_value=0,
+     )
+     groups = groups.reshape(query.shape[0], budget).long().sort(-1).values
++    if fuse_postprocess:
++        from .decode_data_fusions import expand_decode_candidates
++
++        return expand_decode_candidates(groups, visible)
+     history = (
+         (groups[..., None] * ratio + offsets)
+         .masked_fill(((groups < 0) | (groups >= cutoff[:, None]))[..., None], -1)
+--- a/vllm_ascend/models/hy_v4_flash/c8_read.py
++++ b/vllm_ascend/models/hy_v4_flash/c8_read.py
+@@ -91,6 +91,61 @@
+             SFA_QSFA_TILE_SIZE,
+             _ROWS_PER_PROGRAM,
+             num_warps=1,
++        )
++    return output
++
++
++@triton.jit(do_not_specialize=["count"])
++def _read_c8_fia_rows(
++    cache, rope_cache, scale_cache, block_table, positions,
++    latent_output, rope_output, mask_output, count,
++    ROW_BYTES: tl.constexpr, PAGE_SIZE: tl.constexpr,
++    LATENT: tl.constexpr, ROPE: tl.constexpr, SCALE_TILE: tl.constexpr, ROWS: tl.constexpr,
++):
++    index = tl.program_id(0) * ROWS + tl.arange(0, ROWS)
++    in_bounds = index < count
++    position = tl.load(positions + index, in_bounds, -1)
++    live = in_bounds & (position >= 0)
++    page = tl.load(block_table + position // PAGE_SIZE, live, 0).to(tl.int64)
++    slot = page * PAGE_SIZE + position % PAGE_SIZE
++    lane = tl.arange(0, LATENT)
++    bits = tl.load(cache + slot[:, None] * ROW_BYTES + lane[None, :], live[:, None], 0)
++    group = tl.arange(0, LATENT // SCALE_TILE)
++    scales = tl.load(
++        scale_cache + slot[:, None] * (ROW_BYTES // 4) + (LATENT + 2 * ROPE) // 4 + group[None, :],
++        live[:, None], 0.0,
++    )
++    decoded = _decode_e4m3fn(bits).reshape((ROWS, LATENT // SCALE_TILE, SCALE_TILE))
++    latent = (decoded * scales[:, :, None]).reshape((ROWS, LATENT))
++    tl.store(latent_output + index[:, None] * LATENT + lane[None, :], latent, in_bounds[:, None])
++    rope_lane = tl.arange(0, ROPE)
++    rope = tl.load(
++        rope_cache + slot[:, None] * (ROW_BYTES // 2) + LATENT // 2 + rope_lane[None, :],
++        live[:, None], 0.0,
++    )
++    tl.store(rope_output + index[:, None] * ROPE + rope_lane[None, :], rope, in_bounds[:, None])
++    tl.store(mask_output + index, position < 0, in_bounds)
++
++
++def empty_c8_fia_rows(queries, candidates, device):
++    latent = torch.empty((queries, candidates, 1, _LATENT), dtype=torch.bfloat16, device=device)
++    rope = torch.empty((queries, candidates, 1, _ROPE), dtype=torch.bfloat16, device=device)
++    mask = torch.empty((queries, 1, 1, candidates), dtype=torch.bool, device=device)
++    return latent, rope, mask
++
++
++def gather_c8_fia_rows(cache, block_table, block_size, positions, *, output=None):
++    """Gather sparse rows directly into contiguous BF16 FIA K/rope and mask."""
++    queries, candidates = positions.shape
++    if output is None:
++        output = empty_c8_fia_rows(queries, candidates, cache.device)
++    count = positions.numel()
++    if count:
++        _read_c8_fia_rows[(triton.cdiv(count, _ROWS_PER_PROGRAM),)](
++            cache, cache.view(torch.bfloat16), cache.view(torch.float32), block_table,
++            positions.contiguous(), *output, count, cache.shape[-1], block_size,
++            _LATENT, _ROPE, SFA_QSFA_TILE_SIZE, _ROWS_PER_PROGRAM,
++            num_warps=1, enable_fp_fusion=False, enable_graph_optimize=False,
+         )
+     return output
+ 
+--- a/vllm_ascend/models/hy_v4_flash/decode_data_fusions.py
++++ b/vllm_ascend/models/hy_v4_flash/decode_data_fusions.py
+@@ -0,0 +1,42 @@
++# SPDX-License-Identifier: Apache-2.0
++"""Decode candidate expansion adapted from HY4 Prefill index postprocessing."""
++
++import torch
++from vllm.triton_utils import tl, triton
++
++_POOL_RATIO = 4
++_POOL_BUDGET = 511
++_CANDIDATES = (_POOL_BUDGET + 1) * _POOL_RATIO
++_EXPAND_TILE = 512
++
++
++@triton.jit(do_not_specialize=["rows"])
++def _expand_decode_candidates(
++    groups, visible, output, rows, TILE: tl.constexpr,
++    RATIO: tl.constexpr, BUDGET: tl.constexpr, CANDIDATES: tl.constexpr,
++):
++    index = tl.program_id(0) * TILE + tl.arange(0, TILE)
++    row = index // CANDIDATES
++    column = index % CANDIDATES
++    group = column // RATIO
++    lane = column % RATIO
++    live = row < rows
++    position = tl.load(visible + row, live, other=-1).to(tl.int64)
++    cutoff = position >> 2
++    selected = tl.load(groups + row * BUDGET + group, live & (group < BUDGET), other=-1).to(tl.int64)
++    history = tl.where((selected >= 0) & (selected < cutoff), selected * RATIO + lane, -1)
++    tail = cutoff * RATIO + lane
++    candidate = tl.where(group < BUDGET, history, tl.where(tail <= position, tail, -1))
++    tl.store(output + index, candidate, live)
++
++
++def expand_decode_candidates(groups, visible):
++    """Keep the sorted LI order and return the original INT64 candidate contract."""
++    rows = groups.shape[0]
++    output = torch.empty((rows, _CANDIDATES), dtype=torch.int64, device=groups.device)
++    if rows:
++        _expand_decode_candidates[(triton.cdiv(rows * _CANDIDATES, _EXPAND_TILE),)](
++            groups.contiguous(), visible.contiguous(), output, rows, _EXPAND_TILE,
++            _POOL_RATIO, _POOL_BUDGET, _CANDIDATES,
++        )
++    return output
+--- a/release_notes/fragments/22839-decode-data-fusions.yaml
++++ b/release_notes/fragments/22839-decode-data-fusions.yaml
+@@ -0,0 +1,4 @@
++pr: 22839
++entries:
++  - category: performance
++    text: HY4 Flash Decode on Ascend 950 can avoid the FP32 IndexPool staging buffer and fuse candidate postprocessing and C8 input preparation. Set additional_config.hy4flash_decode_data_fusions to false to use the previous data preparation paths; restart serving to recapture Decode graphs after changing it.
+diff --git a/vllm_ascend/ascend_config.py b/vllm_ascend/ascend_config.py
+index 4675b0d..37ca949 100644
+--- a/vllm_ascend/ascend_config.py
++++ b/vllm_ascend/ascend_config.py
+@@ -1988,6 +1988,7 @@ def init_ascend_config(vllm_config: VllmConfig) -> AscendConfig:
+         "hy4flash_cannbot_mla_prolog",
+         "hy4flash_cann_engram_rms",
+         "hy4flash_decode_native_fusions",
++        "hy4flash_decode_data_fusions",
+         "hy4flash_decode_rms",
+         "hy4flash_decode_rope_cache",
+         "hy4flash_decode_rope",
