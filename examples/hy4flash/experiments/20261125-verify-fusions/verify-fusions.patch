@@ -1,0 +1,878 @@
+diff --git a/vllm_ascend/envs.py b/vllm_ascend/envs.py
+index c05dc7ef024dd232d573ed1d53859be108a05781..06f1553a0225af7504edc1ff9521033b5184e5cc 100644
+--- a/vllm_ascend/envs.py
++++ b/vllm_ascend/envs.py
+@@ -49,6 +49,22 @@ def _bool_env(name: str, default: bool) -> bool:
+ 
+ 
+ env_variables: dict[str, Callable[[], Any]] = {
++    # Independent HY4 graph-external embedding/RoPE-hash preparation controls.
++    # Valid values: 0/1; empty is disabled. Unset returns None and retains the
++    # legacy HY4_TARGET_PREP_EXTRA_FUSIONS group switch (default disabled).
++    # Explicit 0 disables that path even when the legacy group is enabled.
++    # Not sensitive: no credentials or keys. D-only pure Decode guards apply.
++    "VLLM_ASCEND_HY4_TARGET_EMBED_FUSION": lambda: (
++        None if os.getenv("VLLM_ASCEND_HY4_TARGET_EMBED_FUSION") is None
++        else _bool_env("VLLM_ASCEND_HY4_TARGET_EMBED_FUSION", False)
++    ),
++    "VLLM_ASCEND_HY4_TARGET_ROPE_HASH_FUSION": lambda: (
++        None if os.getenv("VLLM_ASCEND_HY4_TARGET_ROPE_HASH_FUSION") is None
++        else _bool_env("VLLM_ASCEND_HY4_TARGET_ROPE_HASH_FUSION", False)
++    ),
++    # Enable HY4 CPU-offloaded BF16 Engram row staging and native batch lookup.
++    # Default: False. Valid values: 0/1. Not sensitive; no credentials or keys.
++    "VLLM_ASCEND_HY4_ENGRAM_ROW_PREP": lambda: _bool_env("VLLM_ASCEND_HY4_ENGRAM_ROW_PREP", False),
+     # max compile thread number for package building. Usually, it is set to
+     # the number of CPU cores. If not set, the default value is None, which
+     # means all number of CPU cores will be used.
+diff --git a/vllm_ascend/models/hy_v4_flash/engram_hash_triton.py b/vllm_ascend/models/hy_v4_flash/engram_hash_triton.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..9d5e2ab908aef2cf5496d6b6596265e0f71c2ee1
+--- /dev/null
++++ b/vllm_ascend/models/hy_v4_flash/engram_hash_triton.py
+@@ -0,0 +1,120 @@
++# SPDX-License-Identifier: Apache-2.0
++"""Fused decode Engram lookback/hash preparation; no tensor upload in wrapper.
++
++Contract: GPU query boundaries start at zero, are nondecreasing, and each
++request has at most max_query_len tokens. query_start_loc[num_reqs] <= output T.
++Only launch on already valid request-state indices. CPU offloaded table lookup
++remains the caller's responsibility.
++"""
++import torch
++from vllm.triton_utils import tl, triton
++
++
++@triton.jit
++def _fused_engram_hash_kernel(
++    ids, starts, mapping, computed, all_ids, token_map, multipliers,
++    primes, offsets, output,
++    ALL_STRIDE: tl.constexpr, OUT_LAYER_STRIDE: tl.constexpr,
++    OUT_TOKEN_STRIDE: tl.constexpr, OUT_HEAD_STRIDE: tl.constexpr,
++    NREQ: tl.constexpr, NTOK: tl.constexpr, VOCAB: tl.constexpr,
++    DEPTH: tl.constexpr, NHEAD: tl.constexpr, TOTAL_HEADS: tl.constexpr,
++    MAX_QUERY: tl.constexpr, PAD_ID: tl.constexpr, PAD_TOKEN: tl.constexpr,
++    VISUAL_IDS: tl.constexpr, BLOCK: tl.constexpr, PAD_BLOCK: tl.constexpr,
++):
++    layer = tl.program_id(0)
++    req = tl.program_id(1)
++    if req == NREQ:
++        # Disjoint stores from request programs; covers even an all-empty batch.
++        end = tl.load(starts + NREQ)
++        pad_lane = tl.arange(0, PAD_BLOCK)
++        token = pad_lane // TOTAL_HEADS
++        pad_head = pad_lane % TOTAL_HEADS
++        tl.store(output + layer * OUT_LAYER_STRIDE + token * OUT_TOKEN_STRIDE
++                 + pad_head * OUT_HEAD_STRIDE, -1,
++                 (token >= end) & (token < NTOK))
++    else:
++        first = tl.load(starts + req)
++        stop = tl.load(starts + req + 1)
++        state = tl.load(mapping + req)
++        num_computed = tl.load(computed + state)
++        lane = tl.arange(0, BLOCK)
++        local = lane // TOTAL_HEADS
++        head = lane % TOTAL_HEADS
++        position = first + local
++        live = (local < MAX_QUERY) & (position < stop) & (position < NTOK)
++        current = tl.load(ids + tl.maximum(position, 0), live, other=-1).to(tl.int64)
++        invalid = (current < 0) | (current >= VOCAB) | (current == PAD_TOKEN)
++        for visual in tl.static_range(len(VISUAL_IDS)):
++            invalid = invalid | (current == VISUAL_IDS[visual])
++        rolling = tl.full((BLOCK,), 0, tl.int64)
++        blocked = tl.full((BLOCK,), False, tl.int1)
++        for shift in tl.static_range(DEPTH + 1):
++            preceding = local - shift
++            in_current = preceding >= 0
++            input_pos = tl.maximum(position - shift, 0)
++            history_pos = num_computed + preceding
++            safe_history_pos = tl.maximum(history_pos, 0)
++            current_source = tl.load(ids + input_pos, live & in_current, other=-1)
++            history_source = tl.load(
++                all_ids + state * ALL_STRIDE + safe_history_pos,
++                live & ~in_current & (history_pos >= 0), other=-1,
++            )
++            source = tl.where(in_current, current_source, history_source).to(tl.int64)
++            blocked = blocked | (source < 0) | (source >= VOCAB)
++            safe_source = tl.minimum(tl.maximum(source, 0), VOCAB - 1)
++            mapped = tl.load(token_map + safe_source, live, other=0).to(tl.int64)
++            mapped = tl.where(blocked, PAD_ID, mapped).to(tl.int64)
++            factor = tl.load(multipliers + layer * (DEPTH + 1) + shift)
++            rolling = rolling ^ (mapped * factor)
++            if shift > 0:
++                order_head = (shift - 1) * NHEAD + head % NHEAD
++                prime = tl.load(primes + layer * TOTAL_HEADS + order_head)
++                offset = tl.load(offsets + layer * TOTAL_HEADS + order_head)
++                # Triton integer remainder is truncating. PyTorch '%' with a
++                # positive prime is floor remainder, also for signed overflow.
++                rem = rolling % prime
++                rem = tl.where(rem < 0, rem + prime, rem)
++                value = tl.where(invalid, -1, rem + offset).to(tl.int32)
++                write = live & (head // NHEAD == shift - 1)
++                tl.store(output + layer * OUT_LAYER_STRIDE + position * OUT_TOKEN_STRIDE
++                         + head * OUT_HEAD_STRIDE, value, write)
++
++
++def fused_engram_hashes(input_ids, query_start_loc, idx_mapping,
++                        num_computed_tokens, all_token_ids, token_map,
++                        multipliers, primes, offsets, pad_id, pad_token_id,
++                        visual_ids, output, *, num_reqs=None, max_query_len=6):
++    """Write integer-exact hashes including -1 padding in one kernel launch.
++
++    All tensor inputs are NPU tensors. max_query_len is a host-side upper bound,
++    not a device reduction; caller must ensure it covers the batch's query size.
++    Output may be a noncontiguous slice of a larger capacity allocation.
++    """
++    nreq = idx_mapping.numel() if num_reqs is None else num_reqs
++    layers, ntok, total_heads = output.shape
++    depth = multipliers.shape[1] - 1
++    if depth < 1 or primes.shape != (layers, depth, total_heads // depth):
++        raise ValueError("Invalid Engram prime/head shape")
++    if total_heads % depth or output.dtype != torch.int32:
++        raise ValueError("Expected flattened int32 Engram heads")
++    if query_start_loc.numel() < nreq + 1 or idx_mapping.numel() < nreq:
++        raise ValueError("Insufficient request metadata")
++    if max_query_len < 1 or token_map.numel() < 1:
++        raise ValueError("Empty token map or invalid query bound")
++    if not all(t.is_contiguous() for t in (input_ids, query_start_loc, idx_mapping,
++               num_computed_tokens, token_map, multipliers, primes, offsets)):
++        raise ValueError("Engram metadata must be contiguous")
++    if all_token_ids.stride(1) != 1:
++        raise ValueError("Token histories need contiguous rows")
++    if layers == 0 or ntok == 0:
++        return output
++    _fused_engram_hash_kernel[(layers, nreq + 1)](
++        input_ids, query_start_loc, idx_mapping, num_computed_tokens,
++        all_token_ids, token_map, multipliers, primes, offsets, output,
++        all_token_ids.stride(0), *output.stride(), nreq, ntok, token_map.numel(),
++        depth, total_heads // depth, total_heads, max_query_len,
++        pad_id, pad_token_id, tuple(visual_ids),
++        triton.next_power_of_2(max_query_len * total_heads),
++        triton.next_power_of_2(ntok * total_heads),
++    )
++    return output
+diff --git a/vllm_ascend/models/hy_v4_flash/engram_hash_triton_extra.py b/vllm_ascend/models/hy_v4_flash/engram_hash_triton_extra.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..225726693d210760323aaf7dba9603961295a8e4
+--- /dev/null
++++ b/vllm_ascend/models/hy_v4_flash/engram_hash_triton_extra.py
+@@ -0,0 +1,171 @@
++# SPDX-License-Identifier: Apache-2.0
++"""Fused decode Engram lookback/hash preparation; no tensor upload in wrapper.
++
++Contract: GPU query boundaries start at zero, are nondecreasing, and each
++request has at most max_query_len tokens. query_start_loc[num_reqs] <= output T.
++Only launch on already valid request-state indices. CPU offloaded table lookup
++remains the caller's responsibility.
++"""
++import torch
++from vllm.triton_utils import tl, triton
++
++
++@triton.jit
++def _fused_engram_hash_kernel(
++    ids, starts, mapping, computed, all_ids, token_map, multipliers,
++    primes, offsets, output, rope_positions, rope_prefill, rope_delta, prefill_lens,
++    packed_output,
++    ALL_STRIDE: tl.constexpr, OUT_LAYER_STRIDE: tl.constexpr,
++    OUT_TOKEN_STRIDE: tl.constexpr, OUT_HEAD_STRIDE: tl.constexpr,
++    NREQ: tl.constexpr, NTOK: tl.constexpr, VOCAB: tl.constexpr,
++    DEPTH: tl.constexpr, NHEAD: tl.constexpr, TOTAL_HEADS: tl.constexpr,
++    MAX_QUERY: tl.constexpr, PAD_ID: tl.constexpr, PAD_TOKEN: tl.constexpr,
++    VISUAL_IDS: tl.constexpr, BLOCK: tl.constexpr, PAD_BLOCK: tl.constexpr,
++    WITH_ROPE: tl.constexpr, ROPE_DIMS: tl.constexpr,
++    ROPE_STRIDE: tl.constexpr, PREFILL_STRIDE: tl.constexpr,
++    WITH_PACKED_OUTPUT: tl.constexpr,
++):
++    layer = tl.program_id(0)
++    req = tl.program_id(1)
++    if req == NREQ:
++        # Disjoint stores from request programs; covers even an all-empty batch.
++        end = tl.load(starts + NREQ)
++        pad_lane = tl.arange(0, PAD_BLOCK)
++        token = pad_lane // TOTAL_HEADS
++        pad_head = pad_lane % TOTAL_HEADS
++        tl.store(output + layer * OUT_LAYER_STRIDE + token * OUT_TOKEN_STRIDE
++                 + pad_head * OUT_HEAD_STRIDE, -1,
++                 (token >= end) & (token < NTOK))
++        if WITH_PACKED_OUTPUT:
++            tl.store(packed_output + (layer * NTOK + token) * TOTAL_HEADS + pad_head,
++                     -1, (token >= end) & (token < NTOK))
++    else:
++        first = tl.load(starts + req)
++        stop = tl.load(starts + req + 1)
++        state = tl.load(mapping + req)
++        num_computed = tl.load(computed + state)
++        lane = tl.arange(0, BLOCK)
++        local = lane // TOTAL_HEADS
++        head = lane % TOTAL_HEADS
++        position = first + local
++        live = (local < MAX_QUERY) & (position < stop) & (position < NTOK)
++        if WITH_ROPE:
++            if layer == 0:
++                # Exactly one head lane owns each output position. This keeps
++                # RoPE outside the Target graph and avoids inter-program writes.
++                rope_live = live & (head == 0)
++                prefill_len = tl.load(prefill_lens + state)
++                delta = tl.load(rope_delta + state)
++                orig_pos = num_computed + local
++                for dim in tl.static_range(ROPE_DIMS):
++                    if num_computed < prefill_len:
++                        pos = tl.load(
++                            rope_prefill + (state * ROPE_DIMS + dim) * PREFILL_STRIDE
++                            + tl.maximum(orig_pos, 0), rope_live, other=0)
++                    else:
++                        pos = orig_pos + delta
++                    tl.store(rope_positions + dim * ROPE_STRIDE + position,
++                             pos, rope_live)
++        current = tl.load(ids + tl.maximum(position, 0), live, other=-1).to(tl.int64)
++        invalid = (current < 0) | (current >= VOCAB) | (current == PAD_TOKEN)
++        for visual in tl.static_range(len(VISUAL_IDS)):
++            invalid = invalid | (current == VISUAL_IDS[visual])
++        rolling = tl.full((BLOCK,), 0, tl.int64)
++        blocked = tl.full((BLOCK,), False, tl.int1)
++        for shift in tl.static_range(DEPTH + 1):
++            preceding = local - shift
++            in_current = preceding >= 0
++            input_pos = tl.maximum(position - shift, 0)
++            history_pos = num_computed + preceding
++            safe_history_pos = tl.maximum(history_pos, 0)
++            current_source = tl.load(ids + input_pos, live & in_current, other=-1)
++            history_source = tl.load(
++                all_ids + state * ALL_STRIDE + safe_history_pos,
++                live & ~in_current & (history_pos >= 0), other=-1,
++            )
++            source = tl.where(in_current, current_source, history_source).to(tl.int64)
++            blocked = blocked | (source < 0) | (source >= VOCAB)
++            safe_source = tl.minimum(tl.maximum(source, 0), VOCAB - 1)
++            mapped = tl.load(token_map + safe_source, live, other=0).to(tl.int64)
++            mapped = tl.where(blocked, PAD_ID, mapped).to(tl.int64)
++            factor = tl.load(multipliers + layer * (DEPTH + 1) + shift)
++            rolling = rolling ^ (mapped * factor)
++            if shift > 0:
++                order_head = (shift - 1) * NHEAD + head % NHEAD
++                prime = tl.load(primes + layer * TOTAL_HEADS + order_head)
++                offset = tl.load(offsets + layer * TOTAL_HEADS + order_head)
++                # Triton integer remainder is truncating. PyTorch '%' with a
++                # positive prime is floor remainder, also for signed overflow.
++                rem = rolling % prime
++                rem = tl.where(rem < 0, rem + prime, rem)
++                value = tl.where(invalid, -1, rem + offset).to(tl.int32)
++                write = live & (head // NHEAD == shift - 1)
++                tl.store(output + layer * OUT_LAYER_STRIDE + position * OUT_TOKEN_STRIDE
++                         + head * OUT_HEAD_STRIDE, value, write)
++                if WITH_PACKED_OUTPUT:
++                    tl.store(packed_output + (layer * NTOK + position) * TOTAL_HEADS + head,
++                             value, write)
++
++
++def fused_engram_hashes(input_ids, query_start_loc, idx_mapping,
++                        num_computed_tokens, all_token_ids, token_map,
++                        multipliers, primes, offsets, pad_id, pad_token_id,
++                        visual_ids, output, *, num_reqs=None, max_query_len=6,
++                        rope_state=None, prefill_lens=None, packed_output=None):
++    """Write integer-exact hashes including -1 padding in one kernel launch.
++
++    All tensor inputs are NPU tensors. max_query_len is a host-side upper bound,
++    not a device reduction; caller must ensure it covers the batch's query size.
++    Output may be a noncontiguous slice of a larger capacity allocation.
++    """
++    nreq = idx_mapping.numel() if num_reqs is None else num_reqs
++    layers, ntok, total_heads = output.shape
++    depth = multipliers.shape[1] - 1
++    if depth < 1 or primes.shape != (layers, depth, total_heads // depth):
++        raise ValueError("Invalid Engram prime/head shape")
++    if total_heads % depth or output.dtype != torch.int32:
++        raise ValueError("Expected flattened int32 Engram heads")
++    if query_start_loc.numel() < nreq + 1 or idx_mapping.numel() < nreq:
++        raise ValueError("Insufficient request metadata")
++    if max_query_len < 1 or token_map.numel() < 1:
++        raise ValueError("Empty token map or invalid query bound")
++    if not all(t.is_contiguous() for t in (input_ids, query_start_loc, idx_mapping,
++               num_computed_tokens, token_map, multipliers, primes, offsets)):
++        raise ValueError("Engram metadata must be contiguous")
++    if all_token_ids.stride(1) != 1:
++        raise ValueError("Token histories need contiguous rows")
++    if packed_output is not None and (
++        packed_output.shape != output.shape
++        or packed_output.dtype != output.dtype
++        or packed_output.device != output.device
++        or not packed_output.is_contiguous()
++    ):
++        raise ValueError("Packed hash destination must match shape/dtype/device and be contiguous")
++    if layers == 0 or ntok == 0:
++        return output
++    if rope_state is not None:
++        if prefill_lens is None or not prefill_lens.is_contiguous():
++            raise ValueError("RoPE fusion needs contiguous device prefill lengths")
++        positions = rope_state.positions
++        prefill = rope_state.prefill_positions.gpu
++        delta = rope_state.prefill_delta.gpu
++        if positions.stride(1) != 1 or not prefill.is_contiguous() or not delta.is_contiguous():
++            raise ValueError("Unsupported RoPE buffer strides")
++        dims, pos_stride, prefill_stride = rope_state.num_dims, positions.stride(0), rope_state.max_model_len
++    else:
++        positions = prefill = delta = prefill_lens = input_ids
++        dims, pos_stride, prefill_stride = 0, 0, 0
++    _fused_engram_hash_kernel[(layers, nreq + 1)](
++        input_ids, query_start_loc, idx_mapping, num_computed_tokens,
++        all_token_ids, token_map, multipliers, primes, offsets, output,
++        positions, prefill, delta, prefill_lens,
++        output if packed_output is None else packed_output,
++        all_token_ids.stride(0), *output.stride(), nreq, ntok, token_map.numel(),
++        depth, total_heads // depth, total_heads, max_query_len,
++        pad_id, pad_token_id, tuple(visual_ids),
++        triton.next_power_of_2(max_query_len * total_heads),
++        triton.next_power_of_2(ntok * total_heads),
++        rope_state is not None, dims, pos_stride, prefill_stride,
++        packed_output is not None,
++    )
++    return output
+diff --git a/vllm_ascend/models/hy_v4_flash/engram_row_lookup_cpu.cpp b/vllm_ascend/models/hy_v4_flash/engram_row_lookup_cpu.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..073e94864aee2a57ac32dec6e09caa85927f44b3
+--- /dev/null
++++ b/vllm_ascend/models/hy_v4_flash/engram_row_lookup_cpu.cpp
+@@ -0,0 +1,32 @@
++// SPDX-License-Identifier: Apache-2.0
++#include <algorithm>
++#include <cstdint>
++#include <cstring>
++
++// Tables remain owned by PyTorch. Copy native BF16 bits without conversion.
++extern "C" __attribute__((visibility("default"))) int hy4_engram_rows(
++    const int32_t* hashes, const uint16_t* const* weights,
++    const int64_t* metadata, uint16_t* output,
++    int64_t layers, int64_t tokens, int64_t total_heads,
++    int64_t local_heads, int64_t dim) {
++  if (!hashes || !weights || !metadata || !output || layers != 4 ||
++      tokens < 0 || total_heads <= 0 || local_heads <= 0 || dim <= 0) return -1;
++  for (int64_t l = 0; l < layers; ++l) {
++    const auto* m = metadata + l * 4;
++    // head_start, head_end, vocab_start, vocab_end are shard-specific.
++    if (!weights[l] || m[0] < 0 || m[1] > total_heads ||
++        m[1] - m[0] != local_heads || m[3] <= m[2]) return -2;
++  }
++  for (int64_t l = 0; l < layers; ++l) {
++    const auto* m = metadata + l * 4;
++    for (int64_t t = 0; t < tokens; ++t) {
++      const auto* h = hashes + (l * tokens + t) * total_heads + m[0];
++      auto* dst = output + (l * tokens + t) * local_heads * dim;
++      for (int64_t j = 0; j < local_heads; ++j) {
++        const int64_t index = std::clamp(int64_t(h[j]) - m[2], int64_t(0), m[3] - m[2] - 1);
++        std::memcpy(dst + j * dim, weights[l] + index * dim, size_t(dim) * sizeof(uint16_t));
++      }
++    }
++  }
++  return 0;
++}
+diff --git a/vllm_ascend/models/hy_v4_flash/engram_row_prepare.py b/vllm_ascend/models/hy_v4_flash/engram_row_prepare.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c8d228e7ff43e5f8ee7f6af7f291ffe5975f9014
+--- /dev/null
++++ b/vllm_ascend/models/hy_v4_flash/engram_row_prepare.py
+@@ -0,0 +1,142 @@
++# SPDX-License-Identifier: Apache-2.0
++"""Graph-external Engram CPU lookup with reusable pinned staging.
++
++Opt-in at the caller. The original FP8/unsupported-layout path is preserved.
++The native CPU library is built before service startup; no runtime compilation.
++"""
++import ctypes
++from functools import lru_cache
++from pathlib import Path
++
++import torch
++from vllm.logger import init_logger
++from vllm.triton_utils import tl, triton
++
++from .engram_row_scatter import scatter_engram_rows
++
++logger = init_logger(__name__)
++NUM_LAYERS = 4
++METADATA_FIELDS = 4
++PACK_BLOCK = 256
++
++
++@triton.jit
++def _pack_engram_row_hashes(src, dst, S0: tl.constexpr, S1: tl.constexpr,
++                           S2: tl.constexpr, T: tl.constexpr, H: tl.constexpr,
++                           N: tl.constexpr, BLOCK: tl.constexpr):
++    i = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
++    value = tl.load(src + (i // (T * H)) * S0 + ((i // H) % T) * S1
++                    + (i % H) * S2, i < N, other=0)
++    tl.store(dst + i, value, i < N)
++
++
++@lru_cache(maxsize=1)
++def _lookup_library():
++    """Retain one library handle for this worker process; CDLL calls release the GIL."""
++    try:
++        library = ctypes.CDLL(str(Path(__file__).with_name("engram_row_lookup_cpu.so")))
++        fn = library.hy4_engram_rows
++        fn.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p),
++                       ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p,
++                       *([ctypes.c_int64] * 5)]
++        fn.restype = ctypes.c_int
++        return library, fn
++    except (OSError, AttributeError) as exc:
++        logger.warning_once("HYV4 row preparation native library unavailable; retaining original path: %s", exc)
++        return None
++
++
++class _RowWorkspace:
++    def __init__(self, hashes, rows, embeddings, capacity, signature):
++        self.signature = signature
++        self.capacity = capacity
++        layers, _, heads = hashes.shape
++        _, local_heads, dim = rows[0].shape
++        self.hash_host = torch.empty(layers * capacity * heads, dtype=torch.int32, pin_memory=True)
++        self.hash_device = torch.empty_like(self.hash_host, device=hashes.device)
++        size = layers * capacity * local_heads * dim
++        self.row_host = torch.empty(size, dtype=torch.bfloat16, pin_memory=True)
++        self.row_device = torch.empty(size, dtype=torch.bfloat16, device=hashes.device)
++        self.weights = tuple(e.embedding.weight for e in embeddings)
++        self.pointers = (ctypes.c_void_p * layers)(*(w.data_ptr() for w in self.weights))
++        self.metadata = (ctypes.c_int64 * (layers * METADATA_FIELDS))(*(
++            value for e in embeddings
++            for value in (e.head_start, e.head_end, e.vocab_start, e.vocab_end)))
++        self.download = torch.npu.Event()
++        self.consumed = torch.npu.Event()
++        self.pending = False
++
++
++def try_prepare_engram_rows(state, hashes, rows, packed_hashes=None):
++    """Return True only when all existing graph output buffers were filled."""
++    embeddings = state._engram_embeddings
++    if (len(rows) != NUM_LAYERS or len(embeddings) != NUM_LAYERS or hashes.ndim != 3
++            or hashes.shape[0] != NUM_LAYERS or hashes.dtype != torch.int32
++            or hashes.device.type != "npu"):
++        return False
++    tokens, heads = hashes.shape[1:]
++    shape = tuple(rows[0].shape)
++    if len(shape) != 3 or shape[0] != tokens:
++        return False
++    for embedding, out in zip(embeddings, rows, strict=True):
++        weight = embedding.embedding.weight
++        if (tuple(out.shape) != shape or out.dtype != torch.float32
++                or out.device != hashes.device or weight.device.type != "cpu"
++                or weight.dtype != torch.bfloat16 or not weight.is_contiguous()
++                or weight.ndim != 2 or embedding.fp8
++                or embedding.dim != shape[2] or weight.shape[1] != shape[2]
++                or embedding.head_start < 0 or embedding.head_end > heads
++                or embedding.head_end - embedding.head_start != shape[1]
++                or embedding.vocab_end <= embedding.vocab_start
++                or weight.shape[0] < embedding.vocab_end - embedding.vocab_start):
++            return False
++    if packed_hashes is not None and (
++            packed_hashes.shape != hashes.shape or packed_hashes.dtype != hashes.dtype
++            or packed_hashes.device != hashes.device or not packed_hashes.is_contiguous()):
++        raise ValueError("Invalid packed Engram hash staging view")
++    library = _lookup_library()
++    if library is None:
++        return False
++    fn = library[1]
++    if tokens == 0:
++        return True
++    signature = (heads, shape[1:], hashes.device, tuple(
++        (e.embedding.weight.data_ptr(), tuple(e.embedding.weight.shape),
++         e.head_start, e.head_end, e.vocab_start, e.vocab_end, e.dim)
++        for e in embeddings))
++    workspace = getattr(state, "_engram_row_workspace", None)
++    if workspace is None or workspace.signature != signature or workspace.capacity < tokens:
++        if workspace is not None and workspace.pending:
++            workspace.consumed.synchronize()
++        capacity = max(tokens, state._graph_hashes.shape[1])
++        workspace = state._engram_row_workspace = _RowWorkspace(
++            hashes, rows, embeddings, capacity, signature)
++    if workspace.pending:
++        # CPU pinned buffers cannot be overwritten while the previous H2D reads them.
++        workspace.consumed.synchronize()
++        workspace.pending = False
++    stream = torch.npu.current_stream(hashes.device)
++    count = hashes.numel()
++    host_hashes = workspace.hash_host[:count].view(hashes.shape)
++    source = packed_hashes
++    if source is None:
++        source = workspace.hash_device[:count].view(hashes.shape)
++        _pack_engram_row_hashes[(triton.cdiv(count, PACK_BLOCK),)](
++            hashes, source, *hashes.stride(), tokens, heads, count, PACK_BLOCK)
++    host_hashes.copy_(source, non_blocking=True)
++    workspace.download.record(stream)
++    workspace.download.synchronize()  # CPU lookup consumes downloaded hashes.
++    row_count = NUM_LAYERS * tokens * shape[1] * shape[2]
++    host_rows = workspace.row_host[:row_count]
++    result = fn(host_hashes.data_ptr(), workspace.pointers, workspace.metadata,
++                host_rows.data_ptr(), NUM_LAYERS, tokens, heads, shape[1], shape[2])
++    if result:
++        raise RuntimeError(f"Engram native row lookup contract failed: {result}")
++    device_rows = workspace.row_device[:row_count].view(NUM_LAYERS, *shape)
++    device_rows.copy_(host_rows.view(NUM_LAYERS, *shape), non_blocking=True)
++    if not scatter_engram_rows(device_rows, rows):
++        raise RuntimeError("Validated Engram row scatter unexpectedly declined")
++    workspace.consumed.record(stream)
++    workspace.pending = True
++    logger.info_once("HYV4 Engram row preparation: pinned buffers, native CPU batch lookup and fused scatter enabled")
++    return True
+diff --git a/vllm_ascend/models/hy_v4_flash/engram_row_scatter.py b/vllm_ascend/models/hy_v4_flash/engram_row_scatter.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..f3079936d1e36e350f272e61f81a99eee887d91a
+--- /dev/null
++++ b/vllm_ascend/models/hy_v4_flash/engram_row_scatter.py
+@@ -0,0 +1,57 @@
++# SPDX-License-Identifier: Apache-2.0
++"""Graph-external CPU-offload row conversion, retaining the caller's H2D."""
++import torch
++from vllm.triton_utils import tl, triton
++
++
++@triton.jit
++def _scatter_engram_rows(source, output0, output1, output2, output3, strides: tl.constexpr,
++                         N: tl.constexpr, HEADS: tl.constexpr, DIM: tl.constexpr,
++                         SOURCE_LAYER: tl.constexpr, BLOCK: tl.constexpr):
++    layer = tl.program_id(1)
++    i = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
++    valid = i < N
++    value = tl.load(source + layer * SOURCE_LAYER + i, valid, other=0).to(tl.float32)
++    token = i // (HEADS * DIM)
++    head = (i // DIM) % HEADS
++    channel = i % DIM
++    if layer == 0:
++        offset = token * strides[0][0] + head * strides[0][1] + channel * strides[0][2]
++        tl.store(output0 + offset, value, valid)
++    elif layer == 1:
++        offset = token * strides[1][0] + head * strides[1][1] + channel * strides[1][2]
++        tl.store(output1 + offset, value, valid)
++    elif layer == 2:
++        offset = token * strides[2][0] + head * strides[2][1] + channel * strides[2][2]
++        tl.store(output2 + offset, value, valid)
++    else:
++        offset = token * strides[3][0] + head * strides[3][1] + channel * strides[3][2]
++        tl.store(output3 + offset, value, valid)
++
++
++def scatter_engram_rows(source, outputs):
++    """Convert stacked BF16 NPU rows into existing FP32 graph buffers once.
++
++    Returns False for unsupported layouts so callers retain their old copies.
++    Performs no allocation, address-table upload, or device-to-host conversion.
++    """
++    # Ascend launch ABI requires explicit output pointer arguments. The current
++    # HY4 model has four Engram layers; other layouts retain the original copies.
++    if len(outputs) != 4 or source.ndim != 4 or not source.is_contiguous():
++        return False
++    if source.dtype != torch.bfloat16 or source.device.type != 'npu':
++        return False
++    if source.shape[0] != len(outputs):
++        return False
++    shape = tuple(source.shape[1:])
++    if any(tuple(out.shape) != shape or out.dtype != torch.float32
++           or out.device != source.device for out in outputs):
++        return False
++    # Outputs are distinct, persistent layer buffers owned by model_state.
++    size = source[0].numel()
++    if size:
++        _scatter_engram_rows[(triton.cdiv(size, 256), len(outputs))](
++            source, outputs[0], outputs[1], outputs[2], outputs[3],
++            tuple(tuple(out.stride()) for out in outputs),
++            size, shape[1], shape[2], source.stride(0), 256)
++    return True
+diff --git a/vllm_ascend/models/hy_v4_flash/model_state.py b/vllm_ascend/models/hy_v4_flash/model_state.py
+index 6425920032d08ffe8f08490c3ed6296a2577e4a1..e6f056260cb7a47deca2a704c673c42b008f0626 100644
+--- a/vllm_ascend/models/hy_v4_flash/model_state.py
++++ b/vllm_ascend/models/hy_v4_flash/model_state.py
+@@ -1,11 +1,13 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ 
++import os
+ import torch
+ from vllm.config import CUDAGraphMode
+ from vllm.logger import init_logger
+ from vllm.triton_utils import triton
+ 
++from vllm_ascend import envs
+ from vllm_ascend.ops.triton.engram_lookback import _gather_lookback_kernel
+ from vllm_ascend.worker.v2.model_states.default import AscendModelState
+ 
+@@ -14,6 +16,18 @@ from .aclgraph import FlashAclGraphManager
+ logger = init_logger(__name__)
+ 
+ 
++def _prep_fusion_enabled(value):
++    # Unset independent controls retain the legacy group-switch behavior.
++    if value is None:
++        return os.environ.get("HY4_TARGET_PREP_EXTRA_FUSIONS", "0") == "1"
++    return value
++
++
++def _triton_hash_enabled():
++    return (os.environ.get("HY4_ENGRAM_TRITON_HASH", "1") == "1"
++            or envs.VLLM_ASCEND_HY4_TARGET_ROPE_HASH_FUSION is True)
++
++
+ class FlashModelState(AscendModelState):
+     aclgraph_manager_cls = FlashAclGraphManager
+ 
+@@ -44,6 +58,18 @@ class FlashModelState(AscendModelState):
+                 for embedding in self._engram_embeddings
+             )
+ 
++    def prepare_inputs_embeds(self, scheduled_encoder_inputs, input_batch, req_states):
++        # Experimental work remains outside Target/Draft model graphs.
++        if _prep_fusion_enabled(envs.VLLM_ASCEND_HY4_TARGET_EMBED_FUSION):
++            from .target_embedding_triton import try_prepare_target_embeddings
++
++            result = try_prepare_target_embeddings(
++                self, scheduled_encoder_inputs, input_batch, req_states
++            )
++            if result is not None:
++                return result
++        return super().prepare_inputs_embeds(scheduled_encoder_inputs, input_batch, req_states)
++
+     def prepare_attn(self, input_batch, cudagraph_mode, *args, **kwargs):
+         self._graph_decode = cudagraph_mode == CUDAGraphMode.FULL
+         return super().prepare_attn(input_batch, cudagraph_mode, *args, **kwargs)
+@@ -58,10 +84,102 @@ class FlashModelState(AscendModelState):
+             )
+         }
+ 
+-    def prepare_engram_inputs(self, input_batch, req_states):
++    def _can_fuse_rope_hash(self, input_batch):
++        return (
++            _prep_fusion_enabled(envs.VLLM_ASCEND_HY4_TARGET_ROPE_HASH_FUSION)
++            and _triton_hash_enabled()
++            and self._graph_decode
++            and not input_batch.is_dummy
++            and self._graph_hashes is not None
++            and self.model.token_lookback_depth > 0
++            and input_batch.num_tokens_after_padding > 0
++            and self.rope_state is not None
++            # Original RopeState launches once for every mapping entry, while
++            # hash uses num_reqs. Fall back if those scopes differ (padding).
++            and input_batch.idx_mapping.ndim == 1
++            and input_batch.idx_mapping.shape[0] == input_batch.num_reqs
++            and all(
++                0 <= int(b) - int(a) <= 6
++                for a, b in zip(
++                    input_batch.query_start_loc_np[:input_batch.num_reqs],
++                    input_batch.query_start_loc_np[1:input_batch.num_reqs + 1],
++                )
++            )
++        )
++
++    def prepare_inputs(self, input_batch, req_states):
++        if not self._can_fuse_rope_hash(input_batch):
++            return super().prepare_inputs(input_batch, req_states)
++        # Parent prepare_inputs performs only RoPE preparation followed by the
++        # Engram hook. Compute both here before either result is consumed.
++        model_inputs = self.prepare_engram_inputs(
++            input_batch, req_states, rope_state=self.rope_state
++        )
++        model_inputs["positions"] = self.rope_state.get_positions(
++            input_batch.num_tokens_after_padding
++        )
++        return model_inputs
++
++    def prepare_engram_inputs(self, input_batch, req_states, *, rope_state=None):
+         depth = self.model.token_lookback_depth
+         if depth == 0:
+             return {}
++        if (
++            self._graph_decode
++            and not input_batch.is_dummy
++            and all(
++                0 <= int(b) - int(a) <= 6
++                for a, b in zip(
++                    input_batch.query_start_loc_np[:input_batch.num_reqs],
++                    input_batch.query_start_loc_np[1:input_batch.num_reqs + 1],
++                )
++            )
++            and _triton_hash_enabled()
++        ):
++            use_extra = _prep_fusion_enabled(envs.VLLM_ASCEND_HY4_TARGET_ROPE_HASH_FUSION)
++            if not use_extra and rope_state is None:
++                from .engram_hash_triton import fused_engram_hashes
++            else:
++                from .engram_hash_triton_extra import fused_engram_hashes
++
++            inputs = self.prepare_engram_dummy_inputs(
++                input_batch.num_reqs_after_padding, input_batch.num_tokens_after_padding
++            )
++            hashes, rows = inputs["prepared_engram"]
++            packed_hashes = None
++            if use_extra and rows and all(
++                output.shape == rows[0].shape
++                and embedding.embedding.weight.device.type == "cpu"
++                and embedding.embedding.weight.dtype == torch.bfloat16
++                and not embedding.fp8
++                for embedding, output in zip(self._engram_embeddings, rows, strict=True)
++            ):
++                # Keep graph-visible hash addresses/strides unchanged. The flat
++                # staging allocation is reused, but its compact layer stride
++                # follows this batch's NTOK, so .cpu() needs no Slice packing.
++                storage = getattr(self, "_engram_packed_hash_storage", None)
++                if storage is None:
++                    storage = self._engram_packed_hash_storage = torch.empty(
++                        self._graph_hashes.numel(), dtype=hashes.dtype, device=hashes.device
++                    )
++                packed_hashes = storage[:hashes.numel()].view(hashes.shape)
++            state = self._flash_model.engram_hash
++            if state.layout.lookup_table is None:
++                raise ValueError("Missing checkpoint Engram token map")
++            fused_engram_hashes(
++                input_batch.input_ids, input_batch.query_start_loc,
++                input_batch.idx_mapping, req_states.num_computed_tokens.gpu,
++                req_states.all_token_ids.gpu, state.token_map,
++                state.multipliers, state.primes, state.offsets, state.pad_id,
++                state.layout.pad_token_id, state.visual_token_ids, hashes,
++                num_reqs=input_batch.num_reqs,
++                **({"rope_state": rope_state,
++                    "prefill_lens": req_states.prefill_len.gpu,
++                    "packed_output": packed_hashes}
++                   if use_extra or rope_state is not None else {}),
++            )
++            self._prepare_engram_rows(hashes, rows, packed_hashes=packed_hashes)
++            return inputs
+         history = torch.empty((input_batch.num_reqs, depth), dtype=torch.int32, device=self.device)
+         if input_batch.is_dummy:
+             history.fill_(-1)
+@@ -96,7 +214,12 @@ class FlashModelState(AscendModelState):
+             return inputs
+         return {"lookback_token_ids": history}
+ 
+-    def _prepare_engram_rows(self, hashes, rows):
++    def _prepare_engram_rows(self, hashes, rows, *, packed_hashes=None):
++        if envs.VLLM_ASCEND_HY4_ENGRAM_ROW_PREP:
++            from .engram_row_prepare import try_prepare_engram_rows
++
++            if try_prepare_engram_rows(self, hashes, rows, packed_hashes):
++                return
+         embeddings = self._engram_embeddings
+         if rows and all(
+             output.shape == rows[0].shape
+@@ -107,14 +230,26 @@ class FlashModelState(AscendModelState):
+         ):
+             # Each layer keeps its existing shard and clamp rules. Transfer the
+             # hashes and native BF16 rows together to avoid per-layer barriers.
+-            host_hashes = hashes.cpu()
++            if packed_hashes is not None:
++                if (packed_hashes.shape != hashes.shape or packed_hashes.dtype != hashes.dtype
++                        or packed_hashes.device != hashes.device or not packed_hashes.is_contiguous()):
++                    raise ValueError("Invalid packed Engram hash staging view")
++                host_hashes = packed_hashes.cpu()
++            else:
++                host_hashes = hashes.cpu()
+             host_rows = [
+                 embedding.gather_rows(layer_hashes)[0]
+                 for embedding, layer_hashes in zip(embeddings, host_hashes, strict=True)
+             ]
+             device_rows = torch.stack(host_rows).to(hashes.device)
+-            for output, layer_rows in zip(rows, device_rows, strict=True):
+-                output.copy_(layer_rows)
++            fused_rows = False
++            if os.environ.get("HY4_TARGET_PREP_EXTRA_FUSIONS", "0") == "1":
++                from .engram_row_scatter import scatter_engram_rows
++
++                fused_rows = scatter_engram_rows(device_rows, rows)
++            if not fused_rows:
++                for output, layer_rows in zip(rows, device_rows, strict=True):
++                    output.copy_(layer_rows)
+             logger.info_once("HYV4 Decode batches CPU-offloaded BF16 Engram lookups")
+             return
+ 
+diff --git a/vllm_ascend/models/hy_v4_flash/target_embedding_triton.py b/vllm_ascend/models/hy_v4_flash/target_embedding_triton.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..05c7f7502fcbc388150f76c5f5e384c2889f9b32
+--- /dev/null
++++ b/vllm_ascend/models/hy_v4_flash/target_embedding_triton.py
+@@ -0,0 +1,89 @@
++# SPDX-License-Identifier: Apache-2.0
++"""Experimental graph-external TP1 decode embedding preparation.
++
++No module/model forward is replaced. Caller must supply valid vocabulary IDs,
++apart from the negative speculative holes whose original semantics are row 0.
++"""
++import torch
++from vllm.triton_utils import tl, triton
++from vllm.model_executor.layers.vocab_parallel_embedding import UnquantizedEmbeddingMethod
++from vllm_ascend.ops.vocab_parallel_embedding import AscendVocabParallelEmbedding
++
++
++@triton.jit
++def _target_embedding_prepare_kernel(
++    ids, weight, output,
++    ID_STRIDE: tl.constexpr, WEIGHT_ROW: tl.constexpr,
++    WEIGHT_COL: tl.constexpr, OUTPUT_ROW: tl.constexpr,
++    OUTPUT_COL: tl.constexpr, HIDDEN: tl.constexpr,
++    BLOCK: tl.constexpr,
++):
++    row = tl.program_id(0)
++    col = tl.program_id(1) * BLOCK + tl.arange(0, BLOCK)
++    token = tl.load(ids + row * ID_STRIDE).to(tl.int64)
++    token = tl.maximum(token, 0)
++    values = tl.load(weight + token * WEIGHT_ROW + col * WEIGHT_COL,
++                     col < HIDDEN, other=0)
++    tl.store(output + row * OUTPUT_ROW + col * OUTPUT_COL,
++             values, col < HIDDEN)
++
++
++def _embedding_eligible(embedding, ids, output):
++    """Metadata-only gate; no device data reads, reductions or uploads."""
++    if type(embedding) is not AscendVocabParallelEmbedding:
++        return False
++    if type(embedding.quant_method) is not UnquantizedEmbeddingMethod:
++        return False
++    if embedding.tp_size != 1 or embedding.token_exchange_group is not None:
++        return False
++    reduce_group = getattr(embedding, 'output_reduce_group', None)
++    if reduce_group is not None and reduce_group.world_size != 1:
++        return False
++    weight = embedding.weight
++    return (
++        ids.ndim == 1 and output.ndim == weight.ndim == 2
++        and ids.dtype in (torch.int32, torch.int64)
++        and weight.dtype in (torch.float16, torch.bfloat16, torch.float32)
++        and output.dtype in (torch.float16, torch.bfloat16, torch.float32)
++        and weight.device.type == 'npu' and ids.device == weight.device == output.device
++        and output.shape[0] >= ids.numel() and output.shape[1] == weight.shape[1]
++        and weight.shape[0] >= embedding.num_embeddings
++        and ids.stride(0) > 0 and min(weight.stride()) > 0 and min(output.stride()) > 0
++    )
++
++
++def try_prepare_target_embeddings(state, scheduled_encoder_inputs, input_batch, req_states):
++    """Return preallocated buffer view, or None without touching device state.
++
++    Covers pure decode with no media work, no prompt embeddings, no pruning,
++    no PCP/TP exchange, no quantized/LoRA/custom embedding implementation.
++    Padding rows remain untouched, matching the original prepare_inputs_embeds.
++    """
++    if (scheduled_encoder_inputs or getattr(input_batch, 'has_prefill', True)
++            or input_batch.is_dummy or state.prompt_embeds_state is not None
++            or getattr(state, 'pcp_context', None) is not None):
++        return None
++    core = getattr(state.model, 'language_model', state.model).model
++    if not getattr(core, 'uses_dfly', False):
++        return None
++    embedding = core.embed_tokens
++    if state.supports_mm_inputs:
++        runner = state.encoder_runner
++        if runner.is_realtime or state.mm_pruner is not None:
++            return None
++        output = runner.inputs_embeds
++    else:
++        output = state.inputs_embeds
++    ids = input_batch.input_ids[:input_batch.num_tokens]
++    if not _embedding_eligible(embedding, ids, output):
++        return None
++    # Match AscendModelState.prepare_inputs_embeds's host metadata update.
++    setter = getattr(state.model, 'set_embedding_num_tokens_padded', None)
++    if setter is not None:
++        setter(input_batch.num_tokens_after_padding)
++    if ids.numel():
++        _target_embedding_prepare_kernel[(ids.numel(), triton.cdiv(output.shape[1], 256))](
++            ids, embedding.weight, output, ids.stride(0), *embedding.weight.stride(),
++            *output.stride(), output.shape[1], 256,
++        )
++    return output[:input_batch.num_tokens_after_padding]

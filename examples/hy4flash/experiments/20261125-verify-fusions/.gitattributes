@@ -1,0 +1,2 @@
+verify-fusions.patch -whitespace
+hy4-tested-runtime.patch -whitespace
