@@ -1,0 +1,504 @@
+{
+  "withdrawn_pr": "https://github.com/vllm-project/vllm-ascend/pull/22839",
+  "withdrawn_commit": "3dc154cdf812a7d6e524bc12fd61c0a2956a643c",
+  "withdrawn_parent": "25757d5f18681e4fda9cb867a6235e5259b5a87e",
+  "revert_commit_and_patch_base": "edc7c505fd5be74a99fc68173ede69ce4318da9b",
+  "revert_tree_equals_withdrawn_parent": true,
+  "prepared_commit": "39e5b83b83e07abdfcaf87e80a6d363cd4ca11d1",
+  "prepared_tree": "3d51f5b8c161bdacd3a28360eaf63b307fe440f2",
+  "private_branch": "codex/hy4-verify-fusions-20261125",
+  "previous_private_tip": "7f204ac166a068274546d6d129ecee93b82b8c6a",
+  "original_private_runtime_archive_commit": "576bf0a2c0544720b5f6e8d1c3eff85516e282c2",
+  "original_private_runtime_patch": "../hy4-tested-runtime.patch",
+  "original_private_runtime_patch_file_count": 34,
+  "withdrawn_paths_covered_by_original_private_runtime_patch": [
+    "vllm_ascend/ascend_config.py",
+    "vllm_ascend/distributed/kv_transfer/utils/mooncake_transfer_engine.py",
+    "vllm_ascend/envs.py",
+    "vllm_ascend/models/hy_v4_flash/aclgraph.py",
+    "vllm_ascend/models/hy_v4_flash/attention.py",
+    "vllm_ascend/models/hy_v4_flash/attention_fusions.py",
+    "vllm_ascend/models/hy_v4_flash/c8_read.py",
+    "vllm_ascend/models/hy_v4_flash/decode_data_fusions.py",
+    "vllm_ascend/models/hy_v4_flash/decode_fusions.py",
+    "vllm_ascend/models/hy_v4_flash/dfly.py",
+    "vllm_ascend/models/hy_v4_flash/dfly_fusions.py",
+    "vllm_ascend/models/hy_v4_flash/dfly_speculator.py",
+    "vllm_ascend/models/hy_v4_flash/engram.py",
+    "vllm_ascend/models/hy_v4_flash/engram_batch_hash.py",
+    "vllm_ascend/models/hy_v4_flash/engram_fusions.py",
+    "vllm_ascend/models/hy_v4_flash/engram_hash_triton.py",
+    "vllm_ascend/models/hy_v4_flash/engram_hash_triton_extra.py",
+    "vllm_ascend/models/hy_v4_flash/engram_row_lookup_cpu.cpp",
+    "vllm_ascend/models/hy_v4_flash/engram_row_prepare.py",
+    "vllm_ascend/models/hy_v4_flash/engram_row_scatter.py",
+    "vllm_ascend/models/hy_v4_flash/ihc.py",
+    "vllm_ascend/models/hy_v4_flash/index_pool_fp8.py",
+    "vllm_ascend/models/hy_v4_flash/index_pool_fusions.py",
+    "vllm_ascend/models/hy_v4_flash/index_pool_select.py",
+    "vllm_ascend/models/hy_v4_flash/model_state.py",
+    "vllm_ascend/models/hy_v4_flash/moe.py",
+    "vllm_ascend/models/hy_v4_flash/target_embedding_triton.py",
+    "vllm_ascend/ops/fused_moe/fused_moe.py",
+    "vllm_ascend/ops/triton/target_prep_mask_kernels.py",
+    "vllm_ascend/ops/triton/target_prep_masks.py",
+    "vllm_ascend/platform.py",
+    "vllm_ascend/target_prep_masks.py",
+    "vllm_ascend/worker/v2/aclgraph_utils.py",
+    "vllm_ascend/worker/v2/model_runner.py"
+  ],
+  "withdrawn_integration_paths_absent_from_original_private_runtime_patch": [
+    "docs/source/developer_guide/hy4_decode_integration.md",
+    "setup.py",
+    "tests/ut/models/test_hy_v4_flash_batched_hash.py",
+    "tests/ut/models/test_hy_v4_flash_dfly_dp_graph.py",
+    "tests/ut/models/test_hy_v4_flash_prefill.py",
+    "tests/ut/test_envs.py",
+    "vllm_ascend/models/hy_v4_flash/engram_shared_cpu.py"
+  ],
+  "withdrawn_file_count": 41,
+  "complete_patch_file_count": 62,
+  "changed_since_previous_complete_archive": [
+    "docs/source/developer_guide/hy4_decode_integration.md",
+    "examples/hy4flash/ADAPTATION_SUMMARY.md",
+    "examples/hy4flash/pd_118/README.md",
+    "examples/hy4flash/pd_118/bin/vllm",
+    "examples/hy4flash/pd_118/start_decode.sh",
+    "examples/hy4flash/pd_118/start_prefill.sh",
+    "release_notes/fragments/1.yaml",
+    "release_notes/fragments/hy4-draft-graph-only.yaml",
+    "release_notes/fragments/hy4-fia-dfly-preparation.yaml",
+    "tests/ut/distributed/kv_transfer/test_mooncake_transfer_engine.py",
+    "tests/ut/kv_offload/mooncake_v2/test_base_worker.py",
+    "tests/ut/models/test_hy_v4_flash_dfly_dp_graph.py",
+    "tests/ut/models/test_hy_v4_flash_fia_lengths.py",
+    "tests/ut/models/test_hy_v4_flash_prepare_kernels.py",
+    "vllm_ascend/distributed/kv_transfer/kv_p2p/mooncake/base_worker.py",
+    "vllm_ascend/distributed/kv_transfer/utils/mooncake_transfer_engine.py",
+    "vllm_ascend/envs.py",
+    "vllm_ascend/models/hy_v4_flash/attention.py",
+    "vllm_ascend/models/hy_v4_flash/c8_read.py",
+    "vllm_ascend/models/hy_v4_flash/decode_fusions.py",
+    "vllm_ascend/models/hy_v4_flash/dfly.py",
+    "vllm_ascend/models/hy_v4_flash/dfly_fusions.py",
+    "vllm_ascend/models/hy_v4_flash/dfly_prepare.py",
+    "vllm_ascend/models/hy_v4_flash/dfly_speculator.py",
+    "vllm_ascend/models/hy_v4_flash/fia_lengths.py",
+    "vllm_ascend/utils.py"
+  ],
+  "withdrawn_paths_now_identical_to_base": [
+    "vllm_ascend/envs.py"
+  ],
+  "added_dependency_test_and_documentation_paths": [
+    "docs/source/developer_guide/hy4_cann93_decode.md",
+    "examples/hy4flash/ADAPTATION_SUMMARY.md",
+    "examples/hy4flash/pd_118/README.md",
+    "examples/hy4flash/pd_118/bin/vllm",
+    "examples/hy4flash/pd_118/start_decode.sh",
+    "examples/hy4flash/pd_118/start_prefill.sh",
+    "examples/hy4flash/serve_decode_external_dp.sh",
+    "release_notes/fragments/1.yaml",
+    "release_notes/fragments/hy4-draft-graph-only.yaml",
+    "release_notes/fragments/hy4-fia-dfly-preparation.yaml",
+    "tests/ut/distributed/kv_transfer/test_mooncake_transfer_engine.py",
+    "tests/ut/kv_offload/mooncake_v2/test_base_worker.py",
+    "tests/ut/models/test_hy_v4_flash_controls.py",
+    "tests/ut/models/test_hy_v4_flash_decode_fusions.py",
+    "tests/ut/models/test_hy_v4_flash_engram_shared.py",
+    "tests/ut/models/test_hy_v4_flash_fia_lengths.py",
+    "tests/ut/models/test_hy_v4_flash_prepare_kernels.py",
+    "tests/ut/test_ascend_config.py",
+    "vllm_ascend/distributed/kv_transfer/kv_p2p/mooncake/base_worker.py",
+    "vllm_ascend/models/hy_v4_flash/dfly_prepare.py",
+    "vllm_ascend/models/hy_v4_flash/fia_lengths.py",
+    "vllm_ascend/utils.py"
+  ],
+  "files": [
+    {
+      "path": "docs/source/developer_guide/hy4_cann93_decode.md",
+      "category": "documentation_launch_release_notes",
+      "in_withdrawn_commit": false,
+      "sha256": "deeb00aac410514dec3a3563dc3f37a6142856a84c9768e0904a0ad7b86ee2e5"
+    },
+    {
+      "path": "docs/source/developer_guide/hy4_decode_integration.md",
+      "category": "documentation_launch_release_notes",
+      "in_withdrawn_commit": true,
+      "sha256": "5af76493afb2b78d7c679fef19ee589edf6c31be8e6fe9112a4f20ea8198e21e"
+    },
+    {
+      "path": "examples/hy4flash/ADAPTATION_SUMMARY.md",
+      "category": "documentation_launch_release_notes",
+      "in_withdrawn_commit": false,
+      "sha256": "75b372e10a213bdc6c9620ffa20b7d741da11b9267219bc428a68b1c6d9d0ced"
+    },
+    {
+      "path": "examples/hy4flash/pd_118/README.md",
+      "category": "documentation_launch_release_notes",
+      "in_withdrawn_commit": false,
+      "sha256": "87b55987d698dce7c609c47428dbf3d41b42e87ba4a5ec2fdc6d235d404c18d0"
+    },
+    {
+      "path": "examples/hy4flash/pd_118/bin/vllm",
+      "category": "documentation_launch_release_notes",
+      "in_withdrawn_commit": false,
+      "sha256": "bf65bb7934c6ab82d03172023fba31243efd67d4bd3241a85d158ba978a152f6"
+    },
+    {
+      "path": "examples/hy4flash/pd_118/start_decode.sh",
+      "category": "documentation_launch_release_notes",
+      "in_withdrawn_commit": false,
+      "sha256": "ee79cada1d3e77e9043a8790cf02dca3fc12d260c918d9e2c88f334aadd16f80"
+    },
+    {
+      "path": "examples/hy4flash/pd_118/start_prefill.sh",
+      "category": "documentation_launch_release_notes",
+      "in_withdrawn_commit": false,
+      "sha256": "9463fa898dfacf2e6ecf95c60540d2697e203c212c0aeca40fbb6931b1cf95dd"
+    },
+    {
+      "path": "examples/hy4flash/serve_decode_external_dp.sh",
+      "category": "documentation_launch_release_notes",
+      "in_withdrawn_commit": false,
+      "sha256": "37c3ea5ac1e1a3358c04cd6c3ed11b0ff83f42c4e47b4042275c5f2fa62634c8"
+    },
+    {
+      "path": "release_notes/fragments/1.yaml",
+      "category": "documentation_launch_release_notes",
+      "in_withdrawn_commit": false,
+      "sha256": "4f44f0a221c2098dda7ef7182a5cfa58f17e9d8c4e10e70ca6bb899c4cfddb7e"
+    },
+    {
+      "path": "release_notes/fragments/hy4-draft-graph-only.yaml",
+      "category": "documentation_launch_release_notes",
+      "in_withdrawn_commit": false,
+      "sha256": "181f1dca709f24f7aa0a0713bbce348532c3db47767a6f7a3e6118ff6c5bd5f0"
+    },
+    {
+      "path": "release_notes/fragments/hy4-fia-dfly-preparation.yaml",
+      "category": "documentation_launch_release_notes",
+      "in_withdrawn_commit": false,
+      "sha256": "1ac1bde78b9cc841831aebddba7ba565fc677e6a9bdb9e5a998a4cd6f7c1ac9b"
+    },
+    {
+      "path": "setup.py",
+      "category": "runtime_registration_capture_preparation_and_packaging",
+      "in_withdrawn_commit": true,
+      "sha256": "4bc805992845f9cfb16c9d88d868e15b0683e0dcd843496d9ad9ad04c948f775"
+    },
+    {
+      "path": "tests/ut/distributed/kv_transfer/test_mooncake_transfer_engine.py",
+      "category": "regression_tests",
+      "in_withdrawn_commit": false,
+      "sha256": "563b49c3c904040b9e4c5b21a5c2a984d611184d5c4397c5a2ddcd5cb5a3075b"
+    },
+    {
+      "path": "tests/ut/kv_offload/mooncake_v2/test_base_worker.py",
+      "category": "regression_tests",
+      "in_withdrawn_commit": false,
+      "sha256": "0852983d935e92958cc344832e55f9daae488069bd30f3db1dcea8cf2c507d02"
+    },
+    {
+      "path": "tests/ut/models/test_hy_v4_flash_batched_hash.py",
+      "category": "regression_tests",
+      "in_withdrawn_commit": true,
+      "sha256": "7b59a5dc3d63050f24b108ac304c1f1bc6f205a2cedd003df488f85059172ed0"
+    },
+    {
+      "path": "tests/ut/models/test_hy_v4_flash_controls.py",
+      "category": "regression_tests",
+      "in_withdrawn_commit": false,
+      "sha256": "3f836400bd171508327d2ccaf44c0f99611149b08b3ca43527ad05a2fb969dbb"
+    },
+    {
+      "path": "tests/ut/models/test_hy_v4_flash_decode_fusions.py",
+      "category": "regression_tests",
+      "in_withdrawn_commit": false,
+      "sha256": "7b20d329401da0640f32a40056baf15f8a7d224c17eb08ca43f5cb6777b59f0f"
+    },
+    {
+      "path": "tests/ut/models/test_hy_v4_flash_dfly_dp_graph.py",
+      "category": "regression_tests",
+      "in_withdrawn_commit": true,
+      "sha256": "79107c8f7824d3e1b0a7a09477ebab4ae3a4be3111d6ceb441342203ead23f6b"
+    },
+    {
+      "path": "tests/ut/models/test_hy_v4_flash_engram_shared.py",
+      "category": "regression_tests",
+      "in_withdrawn_commit": false,
+      "sha256": "d69d405d80f905d3108d9b99d1d10077b60a5baeb4781760cb58a48d6d054b78"
+    },
+    {
+      "path": "tests/ut/models/test_hy_v4_flash_fia_lengths.py",
+      "category": "regression_tests",
+      "in_withdrawn_commit": false,
+      "sha256": "f5cfc1884574608250e4eb5969cdd916de4ddddc37e94825c4fa2db3044958f2"
+    },
+    {
+      "path": "tests/ut/models/test_hy_v4_flash_prefill.py",
+      "category": "regression_tests",
+      "in_withdrawn_commit": true,
+      "sha256": "268d3ddea16bf2c55c65de49acf17e943dc9695a07daea5225d51d508d81f14f"
+    },
+    {
+      "path": "tests/ut/models/test_hy_v4_flash_prepare_kernels.py",
+      "category": "regression_tests",
+      "in_withdrawn_commit": false,
+      "sha256": "0891832833502eccb3be03659b6a49996374942a180fd73aa14fe0a853539470"
+    },
+    {
+      "path": "tests/ut/test_ascend_config.py",
+      "category": "regression_tests",
+      "in_withdrawn_commit": false,
+      "sha256": "ec97868d5ed38b98c826bb362d9edfbca93c81176a5fb18994748297cd471035"
+    },
+    {
+      "path": "tests/ut/test_envs.py",
+      "category": "regression_tests",
+      "in_withdrawn_commit": true,
+      "sha256": "e2aeed525b1dc3a58aa9431fee5c777b39a55056215cb194f76877160cbc7d58"
+    },
+    {
+      "path": "vllm_ascend/ascend_config.py",
+      "category": "runtime_registration_capture_preparation_and_packaging",
+      "in_withdrawn_commit": true,
+      "sha256": "9f733a7e867f3973ccded1232aaabc620854b3304802031afceeefcafca1ec94"
+    },
+    {
+      "path": "vllm_ascend/distributed/kv_transfer/kv_p2p/mooncake/base_worker.py",
+      "category": "mooncake_existing_resource_path_and_singleton",
+      "in_withdrawn_commit": false,
+      "sha256": "67e4ad196688b55b83f5ae2b6c05bb3e54196b84dc34ac6ba1d8d2f9579dc79f"
+    },
+    {
+      "path": "vllm_ascend/distributed/kv_transfer/utils/mooncake_transfer_engine.py",
+      "category": "mooncake_existing_resource_path_and_singleton",
+      "in_withdrawn_commit": true,
+      "sha256": "22afea96351daea81307efc1f5a69fca4b26513d59eb42950e35cb32ba97be09"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/aclgraph.py",
+      "category": "runtime_registration_capture_preparation_and_packaging",
+      "in_withdrawn_commit": true,
+      "sha256": "4a4c0215f839490ff8719ed5f15bbd4b31608fc85dd13a6f17c5af440770d04e"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/attention.py",
+      "category": "decode_attention_c8_indexpool_ihc_moe",
+      "in_withdrawn_commit": true,
+      "sha256": "c4095f90993753d415e7c485e2fc70be9e5fc3725c610188293a97277b3fe6b8"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/attention_fusions.py",
+      "category": "decode_attention_c8_indexpool_ihc_moe",
+      "in_withdrawn_commit": true,
+      "sha256": "db719c135acbab50413efce0ea3ed092d800dfb316e7a4284c3b6e724407dcd8"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/c8_read.py",
+      "category": "decode_attention_c8_indexpool_ihc_moe",
+      "in_withdrawn_commit": true,
+      "sha256": "3336bd1cabb09a5a5d2d2251d00fa9cb982ce32a620b0f21cc495cf5eeb46a66"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/decode_data_fusions.py",
+      "category": "decode_attention_c8_indexpool_ihc_moe",
+      "in_withdrawn_commit": true,
+      "sha256": "feee4f673dc4a99a1f74ad465aab6e178fdd88e7b0baa3c2ffb36d04924291ef"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/decode_fusions.py",
+      "category": "decode_attention_c8_indexpool_ihc_moe",
+      "in_withdrawn_commit": true,
+      "sha256": "5a15bd40d86af7f015b454ac7f4b3f0c4fb3c10b4b543484ff468076ca4fed8b"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/dfly.py",
+      "category": "draft_fusions_preparation_and_graphs",
+      "in_withdrawn_commit": true,
+      "sha256": "e0021237b6dc1b9bcaf34bb516149adb7cb3f99ccbe7f98c8f28e8bae0c3346a"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/dfly_fusions.py",
+      "category": "draft_fusions_preparation_and_graphs",
+      "in_withdrawn_commit": true,
+      "sha256": "8708e77ff30fd950e62885121d1f3812c629979e7131de823f7e49cbe7e379ac"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/dfly_prepare.py",
+      "category": "draft_fusions_preparation_and_graphs",
+      "in_withdrawn_commit": false,
+      "sha256": "d382d399918634062f434f32bf57ee9c0689d4d829881c1459c673f1cdfd4f77"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/dfly_speculator.py",
+      "category": "draft_fusions_preparation_and_graphs",
+      "in_withdrawn_commit": true,
+      "sha256": "10ea6f216e4aa8ea31de4209a85a559d05cc280bd8fa474b078723cdd39c4f48"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/engram.py",
+      "category": "decode_engram_hash_lookup_normalization_and_staging",
+      "in_withdrawn_commit": true,
+      "sha256": "3a96107aed268a77ecaec784f76142458046b3133c4aa6f1a59d84410b52ea78"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/engram_batch_hash.py",
+      "category": "decode_engram_hash_lookup_normalization_and_staging",
+      "in_withdrawn_commit": true,
+      "sha256": "30fa6f183db1c6c9282491c187c43972e1cd5fb141c5206ac4787b0acd1091ca"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/engram_fusions.py",
+      "category": "decode_engram_hash_lookup_normalization_and_staging",
+      "in_withdrawn_commit": true,
+      "sha256": "85e2c83cb05d71d8c242b532a699d7c1fe7ddef5af8bb6b34d4f630f1f83d63a"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/engram_hash_triton.py",
+      "category": "decode_engram_hash_lookup_normalization_and_staging",
+      "in_withdrawn_commit": true,
+      "sha256": "2559936cacc1fa5b7072e96e90b99b65d3f14b74eada55f40e39daf67ba66306"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/engram_hash_triton_extra.py",
+      "category": "decode_engram_hash_lookup_normalization_and_staging",
+      "in_withdrawn_commit": true,
+      "sha256": "230cdc5e72cff6eb76b53fe679752dbb3dbc1aff59d59a1daa8f77238b851bcf"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/engram_row_lookup_cpu.cpp",
+      "category": "decode_engram_hash_lookup_normalization_and_staging",
+      "in_withdrawn_commit": true,
+      "sha256": "a629336d260223598c9eb9ccc4619328512a32a351c7f91a3880ee759267b61c"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/engram_row_prepare.py",
+      "category": "decode_engram_hash_lookup_normalization_and_staging",
+      "in_withdrawn_commit": true,
+      "sha256": "ee0a63176a3b43364676b8bd08bff0171883b3303cf24846ed5cd358cbc524ff"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/engram_row_scatter.py",
+      "category": "decode_engram_hash_lookup_normalization_and_staging",
+      "in_withdrawn_commit": true,
+      "sha256": "c5208aaae108f49f09d4680eabc5830c53afa8f13dd42cd2336f473fba9d8ad7"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/engram_shared_cpu.py",
+      "category": "decode_engram_hash_lookup_normalization_and_staging",
+      "in_withdrawn_commit": true,
+      "sha256": "0fa33d6737fb8758352b74805ab2f9692a4b7024a82d066943e612bf99fa9b3c"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/fia_lengths.py",
+      "category": "decode_attention_c8_indexpool_ihc_moe",
+      "in_withdrawn_commit": false,
+      "sha256": "1e48da31a9f7a3a07fbcfb92a818592f0cebd228b28e4a82724e7adc6d379f00"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/ihc.py",
+      "category": "decode_attention_c8_indexpool_ihc_moe",
+      "in_withdrawn_commit": true,
+      "sha256": "adb9d6fee965d79c9cdccf01986eb4ae25b426b102f393740711ce6d3554da85"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/index_pool_fp8.py",
+      "category": "decode_attention_c8_indexpool_ihc_moe",
+      "in_withdrawn_commit": true,
+      "sha256": "308f3cfab464255129ba983c6e83d020dbc0e811745c758a3283339919df12f6"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/index_pool_fusions.py",
+      "category": "decode_attention_c8_indexpool_ihc_moe",
+      "in_withdrawn_commit": true,
+      "sha256": "568d9815dc34f9204692b59d8d37b26ec2592891eaee33d3be4cf25b74712839"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/index_pool_select.py",
+      "category": "decode_attention_c8_indexpool_ihc_moe",
+      "in_withdrawn_commit": true,
+      "sha256": "cc99171f3898718545a248f8b7667cfa7f9f4369c7ef38f34a8d130c70c37fa2"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/model_state.py",
+      "category": "runtime_registration_capture_preparation_and_packaging",
+      "in_withdrawn_commit": true,
+      "sha256": "9baf445aa4e5e26794010c31b2d8144f43291f4e9a133fd35f21a77110218f46"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/moe.py",
+      "category": "decode_attention_c8_indexpool_ihc_moe",
+      "in_withdrawn_commit": true,
+      "sha256": "00680e86745646cb9dbc8cbfa8d52769e9aef1faf0a4bdb51f232553d3a1d63d"
+    },
+    {
+      "path": "vllm_ascend/models/hy_v4_flash/target_embedding_triton.py",
+      "category": "runtime_registration_capture_preparation_and_packaging",
+      "in_withdrawn_commit": true,
+      "sha256": "da721fd7394c9e39e6e4f84b7c10e446130f62e8125ce078c50b4c9e65b7a9ae"
+    },
+    {
+      "path": "vllm_ascend/ops/fused_moe/fused_moe.py",
+      "category": "decode_attention_c8_indexpool_ihc_moe",
+      "in_withdrawn_commit": true,
+      "sha256": "ade9ec3775a538fdf07dbe5aef92913db5d4b53f5e262d4b7dff1dcc08b6ad83"
+    },
+    {
+      "path": "vllm_ascend/ops/triton/target_prep_mask_kernels.py",
+      "category": "runtime_registration_capture_preparation_and_packaging",
+      "in_withdrawn_commit": true,
+      "sha256": "72b7d04835589a122cbb1bb3b7512e0444731ea5b04e9dfd55f5e15242f548b6"
+    },
+    {
+      "path": "vllm_ascend/ops/triton/target_prep_masks.py",
+      "category": "runtime_registration_capture_preparation_and_packaging",
+      "in_withdrawn_commit": true,
+      "sha256": "aba2a3ddda45addb922fbf671c18de0ece3aeb4e7e7eca2cf84751ca1d72fd73"
+    },
+    {
+      "path": "vllm_ascend/platform.py",
+      "category": "runtime_registration_capture_preparation_and_packaging",
+      "in_withdrawn_commit": true,
+      "sha256": "37897ac6e2fcc61e3b28161b522dd6f1ba17958a9bf90b1ddc2124d29faf9248"
+    },
+    {
+      "path": "vllm_ascend/target_prep_masks.py",
+      "category": "runtime_registration_capture_preparation_and_packaging",
+      "in_withdrawn_commit": true,
+      "sha256": "0a2cb1f5548a960c9f0b1fed57ea12364062f3e3a7f09557a3f5bafac5d2a118"
+    },
+    {
+      "path": "vllm_ascend/utils.py",
+      "category": "runtime_registration_capture_preparation_and_packaging",
+      "in_withdrawn_commit": false,
+      "sha256": "eed58337f227eb1385205356b9fc27ea200f7a6bd108febb7b7cb8cec596c57b"
+    },
+    {
+      "path": "vllm_ascend/worker/v2/aclgraph_utils.py",
+      "category": "runtime_registration_capture_preparation_and_packaging",
+      "in_withdrawn_commit": true,
+      "sha256": "791a5a10ff96c24d4cb7629f963a0738831da8a8d60f4ac9c32b026d1ce102a1"
+    },
+    {
+      "path": "vllm_ascend/worker/v2/model_runner.py",
+      "category": "runtime_registration_capture_preparation_and_packaging",
+      "in_withdrawn_commit": true,
+      "sha256": "4747b007ee83be5d250bea28dc195526637c6837fd221b3e832c25a807366dd4"
+    }
+  ],
+  "scope_note": "Decode/Draft fusion and preparation implementation with required runtime, transport, tests and documentation. Existing Prefill implementation in the exact base is retained; no new Prefill optimization files are added.",
+  "configuration": {
+    "only_hy4_optimization_boolean": "hy4flash_dfly_dp_graph",
+    "default": false,
+    "operator_rollback_switches": "removed",
+    "new_hy4_environment_variables": []
+  },
+  "direct_source_counterpart": {
+    "repository": "peterDengcx/vllm-ascend",
+    "branch": "codex/hy4-cann93-contribution",
+    "checked_remote_tip": "8e10cca921622ef494af89731395206a4c3106cc",
+    "prepared_source_is_child": true,
+    "modified_by_this_upload": false
+  }
+}

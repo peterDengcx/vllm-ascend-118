@@ -1,0 +1,50 @@
+{
+  "commit": "39e5b83b83e07abdfcaf87e80a6d363cd4ca11d1",
+  "branch": "codex/hy4-push-cleanup-20261126",
+  "base_commit": "8e10cca921622ef494af89731395206a4c3106cc",
+  "source_container": "hy4-118-cann93-ops-1123",
+  "deployed_source": "/workspace/hy4-cann93/fia-dfly-prep-opt-r10/source",
+  "prepared_source": "/workspace/hy4-cann93/push-cleanup-20261126/source",
+  "retained_hy4_config": {
+    "hy4flash_dfly_dp_graph": false
+  },
+  "removed": [
+    "hy4flash_fused_dfly_prepare",
+    "VLLM_ASCEND_HY4_MOONCAKE_LOCAL_COMM_RES_DIR"
+  ],
+  "mooncake_uses_existing_key": "kv_connector_extra_config.ascend_local_comm_res_path",
+  "checks": {
+    "unit_tests": 166,
+    "triton_cpu_interpreter_tests": 72,
+    "ruff_check": "passed (0.14.0)",
+    "ruff_format": "passed (0.14.0)",
+    "syntax": "17 Python files passed",
+    "codespell": "passed with repository ignore list",
+    "shell_syntax": "passed",
+    "git_diff_check": "passed"
+  },
+  "npu_model_validation": "not rerun",
+  "profiling": "not collected",
+  "full_precommit": "not run",
+  "runtime_source_modified": false,
+  "archive_sha256": "12a1a104647874400df14210fa12f2398ed1f657a3ce0fbe4e720f781bc5a8eb",
+  "source_commit_pushed_directly": false,
+  "publication": "Full source delta is published as an archive patch; archive branch framework sources are unchanged.",
+  "patch_validation": {
+    "exact_base": "edc7c505fd5be74a99fc68173ede69ce4318da9b",
+    "git_apply_check": "passed",
+    "git_apply": "passed",
+    "reconstructed_tree": "3d51f5b8c161bdacd3a28360eaf63b307fe440f2",
+    "matches_prepared_commit_tree": true,
+    "all_patched_file_hashes_match": 62,
+    "python_syntax_files": 50,
+    "patch_sha256": "3f4a4c846708f9a183acbb073b814f2a7e47cb8b2f1456df4905d346945bca56"
+  },
+  "publication_target": "peterDengcx/vllm-ascend-118:codex/hy4-verify-fusions-20261125",
+  "archive_checks": {
+    "json_and_test_log_consistency": "passed",
+    "git_diff_cached_check": "passed",
+    "complete_patch_result_tree": "matches prepared source",
+    "markdownlint": "not run: npm dependency fetch failed with SELF_SIGNED_CERT_IN_CHAIN"
+  }
+}

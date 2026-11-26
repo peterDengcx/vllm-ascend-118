@@ -1,7 +1,8 @@
 # HY4 verify input preparation fusions
 
-For the November 26 Decode candidate with optimization flags consolidated to
-the Draft graph control, use [the latest patch and manual launch entry](latest-20261126/README.md).
+For the cleaned replacement of withdrawn PR 22839 commit `3dc154cdf`, use
+[the complete 62-file Decode/Draft patch and correspondence map](latest-20261126/README.md).
+Only the Draft graph control remains; earlier operator switches are obsolete.
 The rest of this page describes the earlier November 25 experiment.
 
 This archive contains the integrated tested-runtime patch and a narrower patch

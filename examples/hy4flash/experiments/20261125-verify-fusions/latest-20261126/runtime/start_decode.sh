@@ -14,7 +14,6 @@ source /usr/local/Ascend/cann-9.3.0/share/info/ascendnpu-ir/bin/set_env.sh
 source /usr/local/Ascend/nnal/atb/set_env.sh --cxx_abi=1
 set -u
 export VLLM_SERVER_DEV_MODE=1
-export VLLM_ASCEND_HY4_MOONCAKE_LOCAL_COMM_RES_DIR="/workspace/hy4-cann93/hy4-draft-only-20261126/pd-compat-06/communication-resources"
 export ASCEND_GLOBAL_RESOURCE_CONFIG='{"comm_resource_config.link_priority":"PEER2PEER"}'
 export ASCEND_LOCAL_COMM_RES='{"version":"1.3"}'
 export NO_PROXY='*'
