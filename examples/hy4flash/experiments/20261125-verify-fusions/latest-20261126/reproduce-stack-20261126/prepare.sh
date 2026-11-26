@@ -5,7 +5,7 @@ ARCHIVE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd /workspace/repro
 test ! -e ascend-src
 test ! -e vllm-src
-git clone https://github.com/vllm-project/vllm-ascend.git ascend-src
+git clone --branch Hy4-flash-opti https://github.com/LostFox11/vllm-ascend.git ascend-src
 git -C ascend-src checkout edc7c505fd5be74a99fc68173ede69ce4318da9b
 git -C ascend-src apply --check "$ARCHIVE/../hy4-decode-complete.patch"
 git -C ascend-src apply "$ARCHIVE/../hy4-decode-complete.patch"
