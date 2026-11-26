@@ -1,0 +1,42 @@
+{
+  "decode-3.log": [
+    "(APIServer pid=8355) WARNING 11-26 20:27:38 [patch_triton.py:69] NPU Triton causal_conv1d_update is unavailable (cannot import name 'causal_conv1d_update_npu' from 'vllm_ascend.ops.triton.mamba.causal_conv1d' (/workspace/repro/ascend-src/vllm_ascend/ops/triton/mamba/causal_conv1d.py)); falling back to the PyTorch implementation, which syncs per request and therefore stalls ACL graph capture at decode-FULL.",
+    "(VllmWorker-0 pid=12133) WARNING 11-26 20:28:13 [patch_triton.py:69] NPU Triton causal_conv1d_update is unavailable (cannot import name 'causal_conv1d_update_npu' from 'vllm_ascend.ops.triton.mamba.causal_conv1d' (/workspace/repro/ascend-src/vllm_ascend/ops/triton/mamba/causal_conv1d.py)); falling back to the PyTorch implementation, which syncs per request and therefore stalls ACL graph capture at decode-FULL.",
+    "INFO 11-26 20:30:17 [dfly_speculator.py:189] [vllm-ascend] [models] - HYV4 DFly local DP ACLGraph enabled for 4 replicas; capture request sizes: [1, 2, 4, 8].",
+    "(Worker_DP3_EP3 pid=12133) INFO 11-26 20:31:41 [model_runner.py:1226] Graph capturing finished in 84 secs, took 0.71 GiB",
+    "(EngineCore_DP3 pid=9328) WARNING 11-26 20:31:47 [patch_triton.py:69] NPU Triton causal_conv1d_update is unavailable (cannot import name 'causal_conv1d_update_npu' from 'vllm_ascend.ops.triton.mamba.causal_conv1d' (/workspace/repro/ascend-src/vllm_ascend/ops/triton/mamba/causal_conv1d.py)); falling back to the PyTorch implementation, which syncs per request and therefore stalls ACL graph capture at decode-FULL.",
+    "(Worker_DP3_EP3 pid=12133) INFO 11-26 20:32:12 [aclgraph.py:79] FULL ACLGraph replay is active for HYV4 Flash target (1 requests, 6 query tokens)."
+  ],
+  "decode-0.log": [
+    "(APIServer pid=8346) WARNING 11-26 20:27:37 [patch_triton.py:69] NPU Triton causal_conv1d_update is unavailable (cannot import name 'causal_conv1d_update_npu' from 'vllm_ascend.ops.triton.mamba.causal_conv1d' (/workspace/repro/ascend-src/vllm_ascend/ops/triton/mamba/causal_conv1d.py)); falling back to the PyTorch implementation, which syncs per request and therefore stalls ACL graph capture at decode-FULL.",
+    "(VllmWorker-0 pid=12124) WARNING 11-26 20:28:13 [patch_triton.py:69] NPU Triton causal_conv1d_update is unavailable (cannot import name 'causal_conv1d_update_npu' from 'vllm_ascend.ops.triton.mamba.causal_conv1d' (/workspace/repro/ascend-src/vllm_ascend/ops/triton/mamba/causal_conv1d.py)); falling back to the PyTorch implementation, which syncs per request and therefore stalls ACL graph capture at decode-FULL.",
+    "INFO 11-26 20:30:17 [dfly_speculator.py:189] [vllm-ascend] [models] - HYV4 DFly local DP ACLGraph enabled for 4 replicas; capture request sizes: [1, 2, 4, 8].",
+    "Capturing HYV4 DFly ACLGraphs (FULL):   0%|          | 0/4 [00:00<?, ?it/s](EngineCore_DP0 pid=10239) INFO 11-26 20:31:18 [shm_broadcast.py:878] No available shared memory broadcast block found in 60 seconds. This typically happens when some processes are hanging or doing some time-consuming work (e.g. compilation, weight/kv cache quantization).",
+    "Capturing HYV4 DFly ACLGraphs (FULL):  25%|\u2588\u2588\u258c       | 1/4 [00:25<01:15, 25.20s/it]",
+    "Capturing HYV4 DFly ACLGraphs (FULL):  50%|\u2588\u2588\u2588\u2588\u2588     | 2/4 [00:25<00:21, 10.67s/it]",
+    "Capturing HYV4 DFly ACLGraphs (FULL):  75%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u258c  | 3/4 [00:26<00:06,  6.02s/it]",
+    "Capturing HYV4 DFly ACLGraphs (FULL): 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 4/4 [00:26<00:00,  3.83s/it]",
+    "Capturing HYV4 DFly ACLGraphs (FULL): 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 4/4 [00:26<00:00,  6.67s/it]",
+    "(Worker_DP0_EP0 pid=12124) INFO 11-26 20:31:41 [model_runner.py:1226] Graph capturing finished in 84 secs, took 0.72 GiB",
+    "(EngineCore_DP0 pid=10239) WARNING 11-26 20:31:47 [patch_triton.py:69] NPU Triton causal_conv1d_update is unavailable (cannot import name 'causal_conv1d_update_npu' from 'vllm_ascend.ops.triton.mamba.causal_conv1d' (/workspace/repro/ascend-src/vllm_ascend/ops/triton/mamba/causal_conv1d.py)); falling back to the PyTorch implementation, which syncs per request and therefore stalls ACL graph capture at decode-FULL.",
+    "(Worker_DP0_EP0 pid=12124) INFO 11-26 20:32:12 [aclgraph.py:79] FULL ACLGraph replay is active for HYV4 Flash target (1 requests, 6 query tokens).",
+    "INFO 11-26 20:32:30 [dfly_speculator.py:466] [vllm-ascend] [models] - FULL ACLGraph replay is active for HYV4 Flash DFly draft (1 requests)."
+  ],
+  "decode-1.log": [
+    "(APIServer pid=8348) WARNING 11-26 20:27:37 [patch_triton.py:69] NPU Triton causal_conv1d_update is unavailable (cannot import name 'causal_conv1d_update_npu' from 'vllm_ascend.ops.triton.mamba.causal_conv1d' (/workspace/repro/ascend-src/vllm_ascend/ops/triton/mamba/causal_conv1d.py)); falling back to the PyTorch implementation, which syncs per request and therefore stalls ACL graph capture at decode-FULL.",
+    "(VllmWorker-0 pid=12129) WARNING 11-26 20:28:13 [patch_triton.py:69] NPU Triton causal_conv1d_update is unavailable (cannot import name 'causal_conv1d_update_npu' from 'vllm_ascend.ops.triton.mamba.causal_conv1d' (/workspace/repro/ascend-src/vllm_ascend/ops/triton/mamba/causal_conv1d.py)); falling back to the PyTorch implementation, which syncs per request and therefore stalls ACL graph capture at decode-FULL.",
+    "INFO 11-26 20:30:17 [dfly_speculator.py:189] [vllm-ascend] [models] - HYV4 DFly local DP ACLGraph enabled for 4 replicas; capture request sizes: [1, 2, 4, 8].",
+    "(Worker_DP1_EP1 pid=12129) INFO 11-26 20:31:41 [model_runner.py:1226] Graph capturing finished in 83 secs, took 0.72 GiB",
+    "(EngineCore_DP1 pid=9344) WARNING 11-26 20:31:47 [patch_triton.py:69] NPU Triton causal_conv1d_update is unavailable (cannot import name 'causal_conv1d_update_npu' from 'vllm_ascend.ops.triton.mamba.causal_conv1d' (/workspace/repro/ascend-src/vllm_ascend/ops/triton/mamba/causal_conv1d.py)); falling back to the PyTorch implementation, which syncs per request and therefore stalls ACL graph capture at decode-FULL.",
+    "(Worker_DP1_EP1 pid=12129) INFO 11-26 20:32:12 [aclgraph.py:79] FULL ACLGraph replay is active for HYV4 Flash target (1 requests, 6 query tokens).",
+    "INFO 11-26 20:32:32 [dfly_speculator.py:466] [vllm-ascend] [models] - FULL ACLGraph replay is active for HYV4 Flash DFly draft (1 requests)."
+  ],
+  "decode-2.log": [
+    "(APIServer pid=8351) WARNING 11-26 20:27:37 [patch_triton.py:69] NPU Triton causal_conv1d_update is unavailable (cannot import name 'causal_conv1d_update_npu' from 'vllm_ascend.ops.triton.mamba.causal_conv1d' (/workspace/repro/ascend-src/vllm_ascend/ops/triton/mamba/causal_conv1d.py)); falling back to the PyTorch implementation, which syncs per request and therefore stalls ACL graph capture at decode-FULL.",
+    "(VllmWorker-0 pid=12130) WARNING 11-26 20:28:13 [patch_triton.py:69] NPU Triton causal_conv1d_update is unavailable (cannot import name 'causal_conv1d_update_npu' from 'vllm_ascend.ops.triton.mamba.causal_conv1d' (/workspace/repro/ascend-src/vllm_ascend/ops/triton/mamba/causal_conv1d.py)); falling back to the PyTorch implementation, which syncs per request and therefore stalls ACL graph capture at decode-FULL.",
+    "INFO 11-26 20:30:17 [dfly_speculator.py:189] [vllm-ascend] [models] - HYV4 DFly local DP ACLGraph enabled for 4 replicas; capture request sizes: [1, 2, 4, 8].",
+    "(Worker_DP2_EP2 pid=12130) INFO 11-26 20:31:41 [model_runner.py:1226] Graph capturing finished in 83 secs, took 0.72 GiB",
+    "(EngineCore_DP2 pid=9350) WARNING 11-26 20:31:47 [patch_triton.py:69] NPU Triton causal_conv1d_update is unavailable (cannot import name 'causal_conv1d_update_npu' from 'vllm_ascend.ops.triton.mamba.causal_conv1d' (/workspace/repro/ascend-src/vllm_ascend/ops/triton/mamba/causal_conv1d.py)); falling back to the PyTorch implementation, which syncs per request and therefore stalls ACL graph capture at decode-FULL.",
+    "(Worker_DP2_EP2 pid=12130) INFO 11-26 20:32:12 [aclgraph.py:79] FULL ACLGraph replay is active for HYV4 Flash target (1 requests, 6 query tokens)."
+  ]
+}

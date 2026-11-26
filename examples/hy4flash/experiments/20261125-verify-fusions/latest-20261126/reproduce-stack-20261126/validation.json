@@ -1,0 +1,28 @@
+{
+  "decode_source": "39e5b83b83e07abdfcaf87e80a6d363cd4ca11d1",
+  "base": "edc7c505fd5be74a99fc68173ede69ce4318da9b",
+  "overlay_sha256": "8ab570e79ecbabd9a4a30d360ed3ff3a28f2a050c476c21bebb14f4571b76334",
+  "service_retained_for_user_curl": true,
+  "validation": {
+    "startup": true,
+    "inference_requests": 4,
+    "full_format_ci": "Not run: pre-commit is unavailable; targeted checks recorded separately",
+    "accuracy_evaluated": false,
+    "performance_evaluated": false,
+    "health_ports": [
+      18100,
+      18200,
+      18201,
+      18202,
+      18203
+    ],
+    "completion_tokens_each": 32,
+    "profiling_collected": false,
+    "focused_tests_passed": 59
+  },
+  "source_commit": "9273c044deb48719ed7011bc2da2860699bff0f9",
+  "prefill_commits": [
+    "821c4a1a4bbbe8314a4aae5b4d75643dccd7250c",
+    "bbec6137496e8e2aba801146cec98789e7e7c3f0"
+  ]
+}

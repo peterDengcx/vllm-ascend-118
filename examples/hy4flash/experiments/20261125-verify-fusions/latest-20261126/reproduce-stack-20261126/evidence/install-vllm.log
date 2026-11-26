@@ -1,0 +1,19 @@
+Obtaining file:///workspace/repro/vllm-src
+  Checking if build backend supports build_editable: started
+  Checking if build backend supports build_editable: finished with status 'done'
+  Preparing editable metadata (pyproject.toml): started
+  Preparing editable metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: vllm
+  Building editable for vllm (pyproject.toml): started
+  Building editable for vllm (pyproject.toml): still running...
+  Building editable for vllm (pyproject.toml): still running...
+  Building editable for vllm (pyproject.toml): finished with status 'done'
+  Created wheel for vllm: filename=vllm-0.33.0+empty.empty-0.editable-cp312-cp312-linux_aarch64.whl size=11749 sha256=3341ed5f15078485fd46b9c26ad8b52b9dbed206ce3aec696b8d42cdce853de1
+  Stored in directory: /tmp/pip-ephem-wheel-cache-naxcwbwf/wheels/42/61/99/08c8123c8dd3be5a18d658a1ecf1f47418c6c8b230c8edb2a1
+Successfully built vllm
+Installing collected packages: vllm
+  Attempting uninstall: vllm
+    Found existing installation: vllm 0.33.0+empty
+    Not uninstalling vllm at /usr/local/python3.12.13/lib/python3.12/site-packages, outside environment /workspace/repro/venv
+    Can't uninstall 'vllm'. No files were found to uninstall.
+Successfully installed vllm-0.33.0+empty.empty

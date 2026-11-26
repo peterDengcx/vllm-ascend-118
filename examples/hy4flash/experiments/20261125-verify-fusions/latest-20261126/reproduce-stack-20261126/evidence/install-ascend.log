@@ -1,0 +1,17 @@
+Obtaining file:///workspace/repro/ascend-src
+  Checking if build backend supports build_editable: started
+  Checking if build backend supports build_editable: finished with status 'done'
+  Preparing editable metadata (pyproject.toml): started
+  Preparing editable metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: vllm_ascend
+  Building editable for vllm_ascend (pyproject.toml): started
+  Building editable for vllm_ascend (pyproject.toml): finished with status 'done'
+  Created wheel for vllm_ascend: filename=vllm_ascend-0.1.dev1+g553bfc014.d20261126-0.editable-py3-none-any.whl size=12668 sha256=2b3647d08cb3f3fd0905d53a0a93ce7fa600a787a39778cba2f90d5f0fd602f4
+  Stored in directory: /tmp/pip-ephem-wheel-cache-8ls01s41/wheels/cf/0f/26/0dc6de02b6192fb21c02a061d5f42ae6e656c395ee07dce93a
+Successfully built vllm_ascend
+Installing collected packages: vllm_ascend
+  Attempting uninstall: vllm_ascend
+    Found existing installation: vllm_ascend 0.19.1rc2.dev3793+g7a7ed073c
+    Not uninstalling vllm-ascend at /usr/local/python3.12.13/lib/python3.12/site-packages, outside environment /workspace/repro/venv
+    Can't uninstall 'vllm_ascend'. No files were found to uninstall.
+Successfully installed vllm_ascend-0.1.dev1+g553bfc014.d20261126

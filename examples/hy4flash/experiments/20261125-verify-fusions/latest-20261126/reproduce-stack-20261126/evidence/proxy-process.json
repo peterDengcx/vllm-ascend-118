@@ -1,0 +1,25 @@
+{
+  "pid": 6053,
+  "cmd": [
+    "/workspace/repro/venv/bin/python",
+    "/workspace/repro/ascend-src/examples/disaggregated_prefill_v1/load_balance_proxy_server_example.py",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "19385",
+    "--prefiller-hosts",
+    "127.0.0.1",
+    "--prefiller-ports",
+    "18100",
+    "--decoder-hosts",
+    "127.0.0.1",
+    "127.0.0.1",
+    "127.0.0.1",
+    "127.0.0.1",
+    "--decoder-ports",
+    "18200",
+    "18201",
+    "18202",
+    "18203"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "torch": "2.10.0+cpu",
+  "torch-npu": "2.10.0.post7",
+  "triton": "3.6.0",
+  "triton-ascend": "3.6.0.post2",
+  "transformers": "5.19.0",
+  "mooncake-transfer-engine-npu": "0.3.14",
+  "cann-ops-transformer": "1.0.0",
+  "native_libraries": {
+    "/vllm-workspace/vllm-ascend/vllm_ascend/vllm_ascend_C.cpython-312-aarch64-linux-gnu.so": "9ccd8ab29f686d11d3595fc4132369cffd8c09293b3529ee8ab59aea62c1d70c",
+    "/vllm-workspace/vllm-ascend/vllm_ascend/libengram_hixl.so": "f276b2528ce9db662e150e2592bcd1ed19b4da41d268829f4b07f5a048f828b5"
+  }
+}

@@ -1,0 +1,186 @@
+[
+  {
+    "request": {
+      "model": "hy4-flash",
+      "prompt": "Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight.  Question 0: Give a short explanation.",
+      "max_tokens": 32,
+      "temperature": 0,
+      "ignore_eos": true,
+      "stream": false
+    },
+    "status": 200,
+    "elapsed": 39.597193241119385,
+    "response": {
+      "id": "cmpl-a27e2d7e-c6e5-4658-a195-86ec0cba0d07",
+      "object": "text_completion",
+      "created": 1795725132,
+      "model": "hy4-flash",
+      "choices": [
+        {
+          "index": 0,
+          "text": "\nQuestion 1: Give a short explanation.\nQuestion 0: Give a short explanation.\nQuestion 1: Give a short explanation.\nQuestion 0",
+          "logprobs": null,
+          "finish_reason": "length",
+          "stop_reason": null,
+          "token_ids": null,
+          "prompt_logprobs": null,
+          "prompt_token_ids": null,
+          "routed_experts": null,
+          "weight_versions": null
+        }
+      ],
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.33.0.dev0+gba15685.empty-dp4-ep-3294d6b7",
+      "usage": {
+        "prompt_tokens": 450,
+        "total_tokens": 482,
+        "completion_tokens": 32,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "kv_transfer_params": null,
+      "ec_transfer_params": null,
+      "metrics": null
+    }
+  },
+  {
+    "request": {
+      "model": "hy4-flash",
+      "prompt": "Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight.  Question 1: Give a short explanation.",
+      "max_tokens": 32,
+      "temperature": 0,
+      "ignore_eos": true,
+      "stream": false
+    },
+    "status": 200,
+    "elapsed": 0.6946744918823242,
+    "response": {
+      "id": "cmpl-9b4bf4d4-e287-479d-91a8-b7377d3d077e",
+      "object": "text_completion",
+      "created": 1795725152,
+      "model": "hy4-flash",
+      "choices": [
+        {
+          "index": 0,
+          "text": " Question 2: Give a short explanation. Question 1: Give a short explanation. Question 2: Give a short explanation. Question 1: Give",
+          "logprobs": null,
+          "finish_reason": "length",
+          "stop_reason": null,
+          "token_ids": null,
+          "prompt_logprobs": null,
+          "prompt_token_ids": null,
+          "routed_experts": null,
+          "weight_versions": null
+        }
+      ],
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.33.0.dev0+gba15685.empty-dp4-ep-3294d6b7",
+      "usage": {
+        "prompt_tokens": 450,
+        "total_tokens": 482,
+        "completion_tokens": 32,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "kv_transfer_params": null,
+      "ec_transfer_params": null,
+      "metrics": null
+    }
+  },
+  {
+    "request": {
+      "model": "hy4-flash",
+      "prompt": "Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight.  Question 2: Give a short explanation.",
+      "max_tokens": 32,
+      "temperature": 0,
+      "ignore_eos": true,
+      "stream": false
+    },
+    "status": 200,
+    "elapsed": 0.6650166511535645,
+    "response": {
+      "id": "cmpl-c430e486-b5bd-4f86-8d81-121f7e97b98f",
+      "object": "text_completion",
+      "created": 1795725153,
+      "model": "hy4-flash",
+      "choices": [
+        {
+          "index": 0,
+          "text": " Question 2: Give a short explanation. Question 2: Give a short explanation. Question 2: Give a short explanation. Question 2 2",
+          "logprobs": null,
+          "finish_reason": "length",
+          "stop_reason": null,
+          "token_ids": null,
+          "prompt_logprobs": null,
+          "prompt_token_ids": null,
+          "routed_experts": null,
+          "weight_versions": null
+        }
+      ],
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.33.0.dev0+gba15685.empty-dp4-ep-3294d6b7",
+      "usage": {
+        "prompt_tokens": 450,
+        "total_tokens": 482,
+        "completion_tokens": 32,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "kv_transfer_params": null,
+      "ec_transfer_params": null,
+      "metrics": null
+    }
+  },
+  {
+    "request": {
+      "model": "hy4-flash",
+      "prompt": "Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight. Please explain why the sky appears blue in clear daylight.  Question 3: Give a short explanation.",
+      "max_tokens": 32,
+      "temperature": 0,
+      "ignore_eos": true,
+      "stream": false
+    },
+    "status": 200,
+    "elapsed": 0.6637539863586426,
+    "response": {
+      "id": "cmpl-c42f373b-8f86-4b3f-b214-30c96f25ac9d",
+      "object": "text_completion",
+      "created": 1795725153,
+      "model": "hy4-flash",
+      "choices": [
+        {
+          "index": 0,
+          "text": "\nQuestion 3: Give a short explanation.\nQuestion 3: Give a short explanation.\nQuestion  Please  Give a short explanation.\nQuestion ",
+          "logprobs": null,
+          "finish_reason": "length",
+          "stop_reason": null,
+          "token_ids": null,
+          "prompt_logprobs": null,
+          "prompt_token_ids": null,
+          "routed_experts": null,
+          "weight_versions": null
+        }
+      ],
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.33.0.dev0+gba15685.empty-dp4-ep-3294d6b7",
+      "usage": {
+        "prompt_tokens": 450,
+        "total_tokens": 482,
+        "completion_tokens": 32,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "kv_transfer_params": null,
+      "ec_transfer_params": null,
+      "metrics": null
+    }
+  }
+]

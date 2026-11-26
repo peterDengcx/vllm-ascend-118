@@ -1,5 +1,10 @@
 # Complete HY4 Decode fusion patch after withdrawal
 
+The requested clean-container run with Prefill commits `821c4a1a4` and
+`bbec613749` stacked on this patch has now completed startup and four real
+inference requests. See [the resolved overlay, dependencies, launch instructions
+and evidence](reproduce-stack-20261126/README.md). This parent patch is unchanged.
+
 This archive contains the cleaned Decode/Draft patch from prepared source commit
 `39e5b83b83e07abdfcaf87e80a6d363cd4ca11d1`. It supersedes the earlier patch in this directory.
 The private branch remains an archive: framework source files at repository root
