@@ -1,0 +1,4 @@
+CREATE precision-debug-01/file-changes.log: records diagnostic file writes; CREATE requests.py, requests.log, cases.json: compare raw completion and official chat template; no runtime source modified.
+CREATE /workspace/repro/precision-debug-evidence.tar.gz: archive request-format diagnostic evidence; no runtime source changes.
+
+CREATE REPORT.md; MODIFY README.md to use chat template; FORMAT requests.py without changing request payloads; no runtime code modified.

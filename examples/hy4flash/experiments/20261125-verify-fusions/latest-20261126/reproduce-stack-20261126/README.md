@@ -84,17 +84,23 @@ Start the repository's existing PD proxy:
 ```
 
 Wait for `/health` to return HTTP 200 on P port 18100 and all four D ports.
-Then send a completion through the proxy:
+Then send a chat request through the proxy using the model's conversation template:
 
 ```bash
-curl --noproxy '*' http://127.0.0.1:19385/v1/completions \
+curl --noproxy '*' http://127.0.0.1:19385/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"hy4-flash","prompt":"Explain why the sky is blue.","max_tokens":32,"temperature":0,"ignore_eos":true}'
+  -d '{"model":"hy4-flash","messages":[{"role":"user","content":"Explain why the sky is blue."}],"max_tokens":256,"temperature":0,"chat_template_kwargs":{"reasoning_effort":"no_think"}}'
 ```
 
 Success requires HTTP 200, nonempty generated text and positive completion token
 count. This check does not measure model accuracy or performance and collects
 no profiling data.
+
+Raw `/v1/completions` does not apply the model's chat template. A later request-format
+comparison reproduced repetition with a raw prompt and obtained a coherent,
+normally terminated response using `messages` on the same service. See
+[the diagnostic report](precision-debug/REPORT.md). The initial four raw completion
+requests below remain execution-only checks; they do not validate response quality.
 
 ## Verified result
 
