@@ -1,5 +1,9 @@
 # HY4 verify input preparation fusions
 
+For the November 26 Decode candidate with optimization flags consolidated to
+the Draft graph control, use [the latest patch and manual launch entry](latest-20261126/README.md).
+The rest of this page describes the earlier November 25 experiment.
+
 This archive contains the integrated tested-runtime patch and a narrower patch
 for the HY4 target verify input preparation experiments. Both are based on the separately maintained HY4 source
 commit `2c123f517504fa551379f7f5c7f3c4ac0e8b5686`; it is not directly
