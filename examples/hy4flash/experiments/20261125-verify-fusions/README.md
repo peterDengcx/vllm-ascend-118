@@ -1,5 +1,9 @@
 # HY4 verify input preparation fusions
 
+**2026-11-27：精度问题已修复，暂不合入主仓。**
+见[新容器精度修复、补丁和验证范围](precision-fix-20261127/README.md)。
+后续复现使用该修复版；下文保留昨日归档的历史记录。
+
 For the cleaned replacement of withdrawn PR 22839 commit `3dc154cdf`, use
 [the complete 62-file Decode/Draft patch and correspondence map](latest-20261126/README.md).
 Only the Draft graph control remains; earlier operator switches are obsolete.

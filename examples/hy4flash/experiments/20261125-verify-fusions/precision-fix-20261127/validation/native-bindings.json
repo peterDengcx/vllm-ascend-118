@@ -1,0 +1,10 @@
+[
+  "vllm_ascend/vllm_ascend_C.cpython-312-aarch64-linux-gnu.so",
+  "vllm_ascend/libengram_hixl.so",
+  "vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_api/lib/libcust_opapi.so",
+  "vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_impl/ai_core/tbe/op_tiling/liboptiling.so",
+  "vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_impl/ai_core/tbe/op_tiling/lib/linux/aarch64/libcust_opmaster_rt2.0.so",
+  "vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_impl/cpu/aicpu_kernel/impl/libtransformer_aicpu_kernels.so",
+  "vllm_ascend/_cann_ops_custom/vendors/custom_transformer/op_proto/lib/linux/aarch64/libcust_opsproto_rt2.0.so",
+  "vllm_ascend/models/hy_v4_flash/engram_row_lookup_cpu.so"
+]

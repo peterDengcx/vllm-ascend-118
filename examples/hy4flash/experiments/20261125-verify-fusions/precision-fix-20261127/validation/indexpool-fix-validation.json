@@ -1,0 +1,13 @@
+{
+  "baseline_exit": 1,
+  "fixed_exit": 0,
+  "ruff_exit": 0,
+  "source_sha256": {
+    "vllm_ascend/models/hy_v4_flash/attention.py": "b9985aa224463183e3e219b4fa619051f773f71ed1376b37e1bd3207c8c94d37",
+    "vllm_ascend/models/hy_v4_flash/index_pool_select.py": "ded7d93b0fc8d52547a071d11d64b27e30b1954cb8aaedd3898f3c88fb3625e3"
+  },
+  "completed_at": 1795779801.6753378,
+  "test_sha256": "83fc241036f415c272a5ebcca61648c07ca27ae0071c2b3d0d14c0477d2a89f5",
+  "previously_fixed_worktree": "hy4-draft-precision-fix-20261126",
+  "hardware_validation": "not rerun; CPU regressions only"
+}

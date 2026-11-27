@@ -1,0 +1,24 @@
+{
+  "date": "2026-11-27",
+  "status": "Precision defects fixed; HOLD - do not merge upstream",
+  "container": "hy4-pr22839-363c1616b-1127",
+  "remote_source": "/opt/hy4/validation/fia-moe-precision-20261127/source",
+  "incremental_base": "363c1616b1dbbdcd12399301dfaa50b48753adc9",
+  "complete_base": "edc7c505fd5be74a99fc68173ede69ce4318da9b",
+  "files": {
+    "release_notes/fragments/hy4-target-precision.yaml": "baf90c78f9a14ad970e0555476df9f042fd470f117b3882ae5b54758018b7bc1",
+    "tests/ut/models/test_hy_v4_flash_fia_lengths.py": "e8cf4167f31ea998a13b87711a2f54dafa4e52aca88b0132f32bc534978ea231",
+    "tests/ut/models/test_hy_v4_flash_indexpool_precision.py": "83fc241036f415c272a5ebcca61648c07ca27ae0071c2b3d0d14c0477d2a89f5",
+    "tests/ut/models/test_hy_v4_flash_prepare_kernels.py": "b1e70e2aeb657ee4c89cddfc9c7be634801f326022b394f8dbe29cc906ad7804",
+    "vllm_ascend/models/hy_v4_flash/attention.py": "b9985aa224463183e3e219b4fa619051f773f71ed1376b37e1bd3207c8c94d37",
+    "vllm_ascend/models/hy_v4_flash/c8_read.py": "b63afffc6c2125f7e97cda6d0883483e13ab813070c00079755a2ebc73bc435f",
+    "vllm_ascend/models/hy_v4_flash/decode_fusions.py": "91fa33a29612b975f937a1f942f449334e96136fba734febf1628bd56c77bc1f",
+    "vllm_ascend/models/hy_v4_flash/index_pool_select.py": "ded7d93b0fc8d52547a071d11d64b27e30b1954cb8aaedd3898f3c88fb3625e3",
+    "vllm_ascend/models/hy_v4_flash/moe.py": "c86ce86dbe4361014058ff20f293cc74e5fa82753ca91adcf57236dbf746196c",
+    "vllm_ascend/models/hy_v4_flash/precision_attention.py": "3c116be7dfd3520bcac33851f354d9cfa2d132b83e6708911bfdfb821b549f96"
+  },
+  "patches": {
+    "hy4-precision-fix.patch": "ff71a8468767b89497f8045a01121b6647d9400b8d89be0da77c5c0fb3a39e9e",
+    "hy4-complete-fixed.patch": "2399167bac0f11cf4c6362306b5d080c0d93c3da6ddfc4e3a6fa03ab30ec4dec"
+  }
+}

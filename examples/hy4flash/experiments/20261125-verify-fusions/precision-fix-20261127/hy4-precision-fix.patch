@@ -1,0 +1,586 @@
+diff --git a/release_notes/fragments/hy4-target-precision.yaml b/release_notes/fragments/hy4-target-precision.yaml
+new file mode 100644
+index 0000000000000000000000000000000000000000..8aeb45851e45a36ab19998717ec7bed9d348c331
+--- /dev/null
++++ b/release_notes/fragments/hy4-target-precision.yaml
+@@ -0,0 +1,8 @@
++fixes:
++  - |
++    Preserve HY4 Target C8 dequantization and sink normalization in FP32
++    with fused sink-softmax/PV, and retain the rounded expert-sum boundary
++    before the CANN MoE AddRMSNorm call. Keep the remaining Decode and Draft
++    fusions enabled. Restore IndexPool key position encoding and complete
++    short-context history during batched Decode. Dataset accuracy and
++    performance require separate validation.
+diff --git a/tests/ut/models/test_hy_v4_flash_fia_lengths.py b/tests/ut/models/test_hy_v4_flash_fia_lengths.py
+index 2cde3dcd3772e5d7f393026a40f542c51650dc35..51840e0f1cc1b7d3fbda48a665ac6e085ddde485 100644
+--- a/tests/ut/models/test_hy_v4_flash_fia_lengths.py
++++ b/tests/ut/models/test_hy_v4_flash_fia_lengths.py
+@@ -64,47 +64,19 @@ def test_compaction_retains_order_and_zeros_all_invalid_rows():
+ 
+ 
+ @pytest.mark.parametrize("tuple_kv", [False, True])
+-def test_mask_free_fia_preserves_masked_attention_and_sink(tuple_kv, monkeypatch):
++def test_fp32_attention_preserves_kv_and_sink(tuple_kv):
+     torch.manual_seed(1024)
+-    query = torch.randn(3, 2, 576)
+-    kv = torch.randn(3, 4, 576)
+-    selected = torch.tensor([[-1, -1, -1, 0], [-1, 0, 1, -1], [-1, 0, 1, 2]])
++    query = torch.randn(3, 2, 576, dtype=torch.bfloat16)
++    kv = torch.randn(3, 4, 576, dtype=torch.float32)
++    selected = torch.tensor([[-1, -1, -1, 0], [-1, 0, 1, -1], [-1, -1, -1, -1]])
+     sink = torch.tensor([0.3, -0.5])
+     scale = 0.04
+-    calls = []
+-
+-    def fia(**kwargs):
+-        calls.append(kwargs)
+-        assert kwargs.get("atten_mask") is None
+-        assert kwargs["sparse_mode"] == 0
+-        assert kwargs["actual_seq_qlen"] == [1, 1, 1]
+-        assert kwargs["actual_seq_kvlen"] == [1, 2, 3]
+-        contexts, lses = [], []
+-        q = torch.cat((kwargs["query"], kwargs["query_rope"]), -1)[:, 0]
+-        k = torch.cat((kwargs["key"], kwargs["key_rope"]), -1)[:, :, 0]
+-        for row, length in enumerate(kwargs["actual_seq_kvlen"]):
+-            logits = q[row] @ k[row, :length].T * kwargs["softmax_scale"]
+-            contexts.append(logits.softmax(-1) @ kwargs["value"][row, :length, 0])
+-            lses.append(logits.logsumexp(-1))
+-        return torch.stack(contexts)[:, None], torch.stack(lses)[:, :, None, None]
+-
+-    def sink_context(output, lse, sink, selected):
+-        return output * torch.sigmoid(lse.reshape(3, 2) - sink)[..., None]
+-
+-    monkeypatch.setattr(decode_fusions.torch_npu, "npu_fused_infer_attention_score_v2", fia)
+-    monkeypatch.setattr(attention_fusions, "fused_sink_context", sink_context)
+     rows = (kv[..., :512, None].transpose(-1, -2), kv[..., 512:, None].transpose(-1, -2), None) if tuple_kv else kv
+     result = decode_fusions.native_mla_context(
+-        query,
+-        selected,
+-        rows,
+-        sink,
+-        scale,
+-        length_provider=FIALengthProvider("attn", 0, 3, 4, 4),
+-        metadata=metadata([3], 3),
++        query, selected, rows, sink, scale, length_provider=None, metadata=None,
+     )
+-    logits = (query @ kv.transpose(-1, -2) * scale).masked_fill(selected[:, None] < 0, -torch.inf)
++    logits = (query.float() @ kv.transpose(-1, -2) * scale).masked_fill(selected[:, None] < 0, -torch.inf)
+     denominator = torch.cat((logits, sink[None, :, None].expand(3, -1, -1)), -1).softmax(-1)
+-    expected = denominator[..., :-1] @ kv[..., :512]
+-    torch.testing.assert_close(result, expected, rtol=1e-5, atol=1e-6)
+-    assert len(calls) == 1
++    expected = (denominator[..., :-1] @ kv[..., :512]).to(query.dtype)
++    torch.testing.assert_close(result, expected, rtol=0, atol=0)
++    assert torch.count_nonzero(result[2]) == 0
+diff --git a/tests/ut/models/test_hy_v4_flash_indexpool_precision.py b/tests/ut/models/test_hy_v4_flash_indexpool_precision.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..9880bb3e92eebe47a47756b124491fc58f6ad0af
+--- /dev/null
++++ b/tests/ut/models/test_hy_v4_flash_indexpool_precision.py
+@@ -0,0 +1,91 @@
++# SPDX-License-Identifier: Apache-2.0
++
++from types import SimpleNamespace
++
++import pytest
++import torch
++from vllm.models.hy_v4_flash.reference import pooled_keys
++
++from vllm_ascend.models.hy_v4_flash import attention, index_pool_fusions
++from vllm_ascend.models.hy_v4_flash.index_pool_select import select_pool_candidates
++
++
++def test_decode_pool_keys_keep_position_encoding(monkeypatch):
++    monkeypatch.setattr(attention, "get_flash_attention_metadata", lambda: SimpleNamespace(prefill_reqs=(False,)))
++    # Isolate the control flow from the device-only pooling kernel.
++    monkeypatch.setattr(
++        index_pool_fusions,
++        "pool_norm",
++        lambda raw, projection, ape, gamma, eps: pooled_keys(raw, projection[:128], projection[128:], ape, gamma, eps),
++    )
++    raw = torch.randn(8, 128, dtype=torch.bfloat16)
++    weight = torch.randn(128, 128) * 0.05
++    gamma, ape = torch.ones(128), torch.randn(4, 128)
++    calls = []
++
++    def rotate(value, positions, **kwargs):
++        calls.append(positions.clone())
++        phase = positions.float()[:, None] * 10000.0 ** (-torch.arange(0, 64, 2).float() / 64)
++        nope, rotary = value.split((64, 64), dim=-1)
++        even, odd = rotary.float()[..., ::2], rotary.float()[..., 1::2]
++        return torch.cat(
++            (
++                nope,
++                (even * phase.cos() - odd * phase.sin()).to(value.dtype),
++                (odd * phase.cos() + even * phase.sin()).to(value.dtype),
++            ),
++            dim=-1,
++        )
++
++    spec = SimpleNamespace(
++        ratio=4,
++        key_value_projection=SimpleNamespace(weight=weight),
++        key_gate_projection=SimpleNamespace(weight=weight * 0.7),
++        intra_group_ape=ape,
++        key_norm=SimpleNamespace(weight=gamma),
++        eps=1e-5,
++        rotate=rotate,
++        _encode_fp8=lambda value, **kw: value,
++    )
++    positions = torch.arange(4096, 4104)
++    pooled = pooled_keys(raw.reshape(2, 4, 128), weight, weight * 0.7, ape, gamma, spec.eps)
++    expected = rotate(pooled, positions[::4])
++    calls.clear()
++
++    actual = attention.FlashIndexPool.encode_keys(spec, raw, positions, full_graph=True)
++
++    assert len(calls) == 1
++    assert torch.equal(calls[0], positions[::4])
++    assert torch.equal(actual, expected)
++    moved = attention.FlashIndexPool.encode_keys(spec, raw, positions + 97, full_graph=True)
++    assert not torch.equal(actual, moved)
++
++
++@pytest.mark.parametrize("batch_size", [2, 4, 8])
++def test_mixed_short_long_and_padding_keep_candidate_sets(batch_size):
++    visible = torch.tensor([-1, 0, 10, 2044, 2047, 2048] * batch_size)
++    scores = torch.full((visible.numel(), 1024), -torch.inf)
++    long_rows = visible // 4 > 511
++    scores[long_rows, :512] = torch.arange(512).float()
++
++    actual = select_pool_candidates(scores, visible, 1024, 4, 511)
++
++    for position, row in zip(visible.tolist(), actual):
++        if position < 2048:
++            expected = torch.arange(2048).masked_fill(torch.arange(2048) > position, -1)
++        else:
++            # Scores select groups 1..511; group 512 contributes the tail.
++            expected = torch.cat((torch.arange(4, 2048), torch.tensor([2048, -1, -1, -1])))
++        assert torch.equal(row, expected)
++
++
++@pytest.mark.parametrize("visible", [0, 10, 11, 12, 2043, 2044, 2047])
++def test_batched_short_indexpool_keeps_all_visible_history(visible):
++    scores = torch.full((6, 1024), -torch.inf)
++    positions = torch.full((6,), visible, dtype=torch.int64)
++
++    actual = select_pool_candidates(scores, positions, 1024, 4, 511)
++
++    expected = torch.arange(2048).expand(6, -1).clone()
++    expected.masked_fill_(expected > positions[:, None], -1)
++    assert torch.equal(actual, expected)
+diff --git a/tests/ut/models/test_hy_v4_flash_prepare_kernels.py b/tests/ut/models/test_hy_v4_flash_prepare_kernels.py
+index 443cf493577616fe2adee0cee46e618871167537..3a55e06297f08d0e7c242d624f46bd00e1f873d8 100644
+--- a/tests/ut/models/test_hy_v4_flash_prepare_kernels.py
++++ b/tests/ut/models/test_hy_v4_flash_prepare_kernels.py
+@@ -169,37 +169,23 @@ def test_fused_c8_metadata_overwrites_padding_and_matches_reference(batch, padde
+ 
+ 
+ @pytest.mark.parametrize("prepacked", [False, True])
+-def test_native_fia_consumes_compact_marker_without_repacking(monkeypatch, prepacked):
++def test_native_context_respects_packed_reader_mask(prepacked):
+     selected = torch.tensor([[1, -1, 2], [-1, -1, -1]])
+-    nope = torch.arange(2 * 3 * 512).reshape(2, 3, 1, 512).to(torch.bfloat16)
+-    rope = torch.arange(2 * 3 * 64).reshape(2, 3, 1, 64).to(torch.bfloat16)
+-    expected_nope, expected_rope = fia_lengths.compact_fia_rows(selected, nope, rope)
+-    calls = []
+-    original = fia_lengths.compact_fia_rows
+-
+-    def compact(*args):
+-        calls.append(True)
+-        return original(*args)
+-
+-    def fia(**kwargs):
+-        torch.testing.assert_close(kwargs["key"], expected_nope, rtol=0, atol=0)
+-        torch.testing.assert_close(kwargs["key_rope"], expected_rope, rtol=0, atol=0)
+-        assert "atten_mask" not in kwargs
+-        assert kwargs["actual_seq_kvlen"] == [2, 1]
+-        return torch.zeros(2, 1, 2, 512), torch.zeros(2, 2, 1, 1)
+-
+-    monkeypatch.setattr(fia_lengths, "compact_fia_rows", compact)
+-    monkeypatch.setattr(decode_fusions.torch_npu, "npu_fused_infer_attention_score_v2", fia)
+-    monkeypatch.setattr(attention_fusions, "fused_sink_context", lambda output, *args: output)
+-    mask = selected.lt(0)[:, None, None]
+-    kv = fia_lengths.CompactFIAKV(expected_nope, expected_rope, mask) if prepacked else (nope, rope, mask)
+-    decode_fusions.native_mla_context(
+-        torch.zeros(2, 2, 576),
+-        selected,
+-        kv,
+-        torch.zeros(2),
+-        1.0,
+-        length_provider=SimpleNamespace(resolve=lambda _: {"actual_seq_kvlen": [2, 1]}),
+-        metadata=None,
++    torch.manual_seed(1024)
++    kv = torch.randn(2, 3, 576, dtype=torch.float32)
++    query = torch.randn(2, 2, 576, dtype=torch.bfloat16)
++    sink = torch.zeros(2)
++    nope, rope = kv[..., :512].unsqueeze(2), kv[..., 512:].unsqueeze(2)
++    if prepacked:
++        nope, rope = fia_lengths.compact_fia_rows(selected, nope, rope)
++        mask = torch.tensor([[False, False, True], [True, True, True]])[:, None, None]
++        rows = fia_lengths.CompactFIAKV(nope, rope, mask)
++    else:
++        rows = (nope, rope, selected.lt(0)[:, None, None])
++    actual = decode_fusions.native_mla_context(
++        query, selected, rows, sink, 0.04, length_provider=None, metadata=None,
+     )
+-    assert len(calls) == (0 if prepacked else 1)
++    expected = decode_fusions.native_mla_context(
++        query, selected, kv, sink, 0.04, length_provider=None, metadata=None,
++    )
++    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+diff --git a/vllm_ascend/models/hy_v4_flash/attention.py b/vllm_ascend/models/hy_v4_flash/attention.py
+index 39fcc576ed10cf3ecf60aa34c7253bf180799d68..d36ec3e5a1866dd4e5de394a1ed1f38bcdd9656d 100644
+--- a/vllm_ascend/models/hy_v4_flash/attention.py
++++ b/vllm_ascend/models/hy_v4_flash/attention.py
+@@ -417,7 +417,8 @@ class FlashIndexPool(nn.Module):
+         raw = raw[: groups * self.ratio].reshape(groups, self.ratio, INDEX_DIM)
+         if not groups:
+             return raw.new_empty((0, INDEX_DIM), dtype=torch.float32)
+-        if is_decode_batch(get_flash_attention_metadata()):
++        decode_pool = is_decode_batch(get_flash_attention_metadata())
++        if decode_pool:
+             from .index_pool_fusions import pool_norm
+ 
+             if not hasattr(self, "_decode_pool_projection"):
+@@ -432,10 +433,10 @@ class FlashIndexPool(nn.Module):
+                 self.key_norm.weight,
+                 self.eps,
+             )
+-            return self._encode_fp8(pooled, full_graph=full_graph)
+         normalization = None
+         if (
+-            HAS_TRITON
++            not decode_pool
++            and HAS_TRITON
+             and eager_prefill
+             and self.use_eager_fp8_encoding
+             and not full_graph
+@@ -456,7 +457,7 @@ class FlashIndexPool(nn.Module):
+             if values.is_contiguous() and probabilities.is_contiguous():
+                 pooled, inverse_norm = pool_with_inverse_norm(values, probabilities, self.eps)
+                 normalization = (self.key_norm.weight, inverse_norm)
+-        if normalization is None:
++        if not decode_pool and normalization is None:
+             # Both projections consume the same FP32 input. Materialize it once in prefill.
+             pooled = pooled_keys(
+                 raw.float() if eager_prefill else raw,
+@@ -2342,6 +2343,8 @@ class AscendHYV4FlashAttention(nn.Module, AttentionLayerBase):
+                 self.scale,
+                 length_provider=self._fia_length_provider(selected, token_start, graph_queries),
+                 metadata=get_flash_attention_metadata(),
++                scores=scores,
++                query_fp32=query_fp32,
+             )
+             value = _head_bmm(context, wv)
+             if out is None:
+diff --git a/vllm_ascend/models/hy_v4_flash/c8_read.py b/vllm_ascend/models/hy_v4_flash/c8_read.py
+index 9b3aba379ba5d1f7d140ca412145911a0430ca62..3a7be851d9ea2b209b3edf776bee125bb8d264a9 100644
+--- a/vllm_ascend/models/hy_v4_flash/c8_read.py
++++ b/vllm_ascend/models/hy_v4_flash/c8_read.py
+@@ -240,9 +240,9 @@ def compact_fia_positions(positions):
+     return output
+ 
+ 
+-def empty_c8_fia_rows(queries, candidates, device):
+-    latent = torch.empty((queries, candidates, 1, _LATENT), dtype=torch.bfloat16, device=device)
+-    rope = torch.empty((queries, candidates, 1, _ROPE), dtype=torch.bfloat16, device=device)
++def empty_c8_fia_rows(queries, candidates, device, *, dtype=torch.bfloat16):
++    latent = torch.empty((queries, candidates, 1, _LATENT), dtype=dtype, device=device)
++    rope = torch.empty((queries, candidates, 1, _ROPE), dtype=dtype, device=device)
+     mask = torch.empty((queries, 1, 1, candidates), dtype=torch.bool, device=device)
+     return latent, rope, mask
+ 
+@@ -250,15 +250,11 @@ def empty_c8_fia_rows(queries, candidates, device):
+ def empty_compact_c8_fia_rows(queries, candidates, device):
+     from .fia_lengths import CompactFIAKV
+ 
+-    return CompactFIAKV(*empty_c8_fia_rows(queries, candidates, device))
++    return CompactFIAKV(*empty_c8_fia_rows(queries, candidates, device, dtype=torch.float32))
+ 
+ 
+ def gather_compact_c8_fia_rows(cache, block_table, block_size, positions, *, output=None):
+-    """Read stable-packed C8 directly into FIA layout; avoid BF16 KV repacking.
+-
+-    The raw reader stays unchanged, including its FP32 dequantization followed
+-    by the BF16 store. Only the integer selection order changes before reading.
+-    """
++    """Read stable-packed C8 in FP32, retaining the original dequantization."""
+     from .fia_lengths import CompactFIAKV, compact_fia_rows
+ 
+     if (
+@@ -268,7 +264,7 @@ def gather_compact_c8_fia_rows(cache, block_table, block_size, positions, *, out
+         or positions.dtype not in (torch.int32, torch.int64)
+         or not 0 < positions.shape[1] <= _MAX_FIA_COMPACT_CANDIDATES
+     ):
+-        rows = gather_c8_fia_rows(cache, block_table, block_size, positions, output=output)
++        rows = gather_c8_fia_rows(cache, block_table, block_size, positions, output=output, dtype=torch.float32)
+         nope, rope = compact_fia_rows(positions, rows[0], rows[1])
+         rows[0].copy_(nope)
+         rows[1].copy_(rope)
+@@ -276,15 +272,15 @@ def gather_compact_c8_fia_rows(cache, block_table, block_size, positions, *, out
+         rows[2].copy_((torch.arange(positions.shape[1], device=positions.device) >= count[:, None])[:, None, None])
+         return CompactFIAKV(*rows)
+     packed = compact_fia_positions(positions)
+-    rows = gather_c8_fia_rows(cache, block_table, block_size, packed, output=output)
++    rows = gather_c8_fia_rows(cache, block_table, block_size, packed, output=output, dtype=torch.float32)
+     return CompactFIAKV(*rows)
+ 
+ 
+-def gather_c8_fia_rows(cache, block_table, block_size, positions, *, output=None):
++def gather_c8_fia_rows(cache, block_table, block_size, positions, *, output=None, dtype=torch.bfloat16):
+     """Gather sparse rows directly into contiguous BF16 FIA K/rope and mask."""
+     queries, candidates = positions.shape
+     if output is None:
+-        output = empty_c8_fia_rows(queries, candidates, cache.device)
++        output = empty_c8_fia_rows(queries, candidates, cache.device, dtype=dtype)
+     count = positions.numel()
+     if count:
+         _read_c8_fia_rows[(triton.cdiv(count, _ROWS_PER_PROGRAM),)](
+diff --git a/vllm_ascend/models/hy_v4_flash/decode_fusions.py b/vllm_ascend/models/hy_v4_flash/decode_fusions.py
+index 37f83d6b159cdfb9b1d7f9c5229cc8f3effc8da9..d7865d7b6de23e60bddb8b4e95bcefefe459133f 100644
+--- a/vllm_ascend/models/hy_v4_flash/decode_fusions.py
++++ b/vllm_ascend/models/hy_v4_flash/decode_fusions.py
+@@ -33,65 +33,46 @@ def native_rms_norm(value, norm):
+     return torch_npu.npu_rms_norm(value, gamma, eps)[0].to(dtype)
+ 
+ 
+-def native_mla_context(query, selected, kv, sink, scale, *, length_provider, metadata):
+-    """FIA owns QK/masking/softmax/PV; retain the FP32 sink using its LSE."""
+-    from .fia_lengths import CompactFIAKV, compact_fia_rows
++def native_mla_context(query, selected, kv, sink, scale, *, length_provider, metadata, scores=None, query_fp32=None):
++    """Keep FP32 KV and sink normalization in the fused attention calculation.
+ 
++    The CANN MLA FIA ABI accepts only low-precision KV/output and cannot consume
++    a sink for this head dimension. Use the FP32 fusion instead of rounding KV
++    or correcting an already-rounded context. Reader fusion remains enabled.
++    """
++    from .fia_lengths import CompactFIAKV
++    from .precision_attention import fused_fp32_mla_context
++
++    invalid_mask = None
+     if isinstance(kv, tuple):
+-        # The C8 reader has already materialized the exact FIA input layouts.
+-        nope, rope, _ = kv
++        nope, rope, mask = kv
++        values = torch.cat((nope[:, :, 0].float(), rope[:, :, 0].float()), dim=-1)
++        invalid_mask = mask
++        if isinstance(kv, CompactFIAKV) and scores is not None:
++            order = torch.argsort((selected < 0).to(torch.int32), dim=-1, stable=True)
++            scores = scores.gather(-1, order[:, None].expand(-1, scores.shape[1], -1))
+     else:
+-        keys = kv.to(query.dtype).unsqueeze(2)
+-        nope = keys[..., :512].contiguous()
+-        rope = keys[..., 512:].contiguous()
+-    if not isinstance(kv, CompactFIAKV):
+-        # Unsupported readers retain the original stable compaction path.
+-        nope, rope = compact_fia_rows(selected, nope, rope)
+-    kwargs = dict(
+-        query=query[..., :512].unsqueeze(1).contiguous(),
+-        key=nope,
+-        value=nope,
+-        query_rope=query[..., 512:].unsqueeze(1).contiguous(),
+-        key_rope=rope,
+-        num_query_heads=query.shape[1],
+-        num_key_value_heads=1,
+-        input_layout="BSND",
+-        sparse_mode=0,
+-        actual_seq_qlen=[1] * query.shape[0],
+-        softmax_scale=scale,
+-        return_softmax_lse=True,
+-    )
+-    kwargs.update(length_provider.resolve(metadata))
+-    if query.device.type == "npu" and torch.npu.is_current_stream_capturing():
+-        from vllm_ascend.compilation.updatable_graph import get_capture_resource, register_task
+-
+-        workspace_kwargs = {**kwargs, "actual_seq_kvlen": [selected.shape[1]] * query.shape[0]}
+-        # Sequential FIA calls on one stream can reuse scratch storage. The
+-        # provider is call-specific metadata, not a workspace shape identity.
+-        workspace_key = (
+-            "hy4.mla.fia.workspace",
+-            tuple(kwargs["query"].shape),
+-            tuple(nope.shape),
+-            tuple(rope.shape),
+-            query.dtype,
+-            torch.npu.current_stream().npu_stream,
+-        )
+-        workspace = get_capture_resource(
+-            workspace_key,
+-            lambda: torch_npu._npu_fused_infer_attention_score_v2_get_max_workspace(**workspace_kwargs),
++        values = kv.float()
++    attention_query = query if query_fp32 is None else query_fp32
++    if query.device.type == "npu":
++        return fused_fp32_mla_context(
++            attention_query,
++            selected,
++            values,
++            sink,
++            scale,
++            invalid_mask=invalid_mask,
++            scores=scores,
++            output_dtype=query.dtype,
+         )
+-        output = torch.empty((query.shape[0], 1, query.shape[1], 512), dtype=query.dtype, device=query.device)
+-        lse = torch.empty((query.shape[0], query.shape[1], 1, 1), dtype=torch.float32, device=query.device)
+-        register_task(
+-            torch_npu.npu_fused_infer_attention_score_v2.out,
+-            {**kwargs, "workspace": workspace, "out": [output, lse]},
+-            length_provider,
+-        )
+-    else:
+-        output, lse = torch_npu.npu_fused_infer_attention_score_v2(**kwargs)
+-    from .attention_fusions import fused_sink_context
+-
+-    return fused_sink_context(output.squeeze(1), lse, sink, selected)
++    # CPU execution is for reference tests; no CANN/Triton launch is possible.
++    if scores is None:
++        scores = torch.bmm(attention_query.float(), values.transpose(1, 2))
++    invalid = selected < 0 if invalid_mask is None else invalid_mask.reshape_as(selected)
++    logits = (scores * scale).masked_fill(invalid[:, None], -torch.inf)
++    logits = torch.cat((logits, sink[None, :, None].expand(query.shape[0], -1, 1)), -1)
++    probabilities = logits.softmax(-1)[..., :-1]
++    return torch.bmm(probabilities, values[..., :512]).to(query.dtype)
+ 
+ 
+ def native_indexpool_rope(nope, even, odd, cos, sin, dtype):
+diff --git a/vllm_ascend/models/hy_v4_flash/index_pool_select.py b/vllm_ascend/models/hy_v4_flash/index_pool_select.py
+index df665c8861dfb922686018636226713819366187..9b1ed031bb0ff7a544ea38718ca3b21c22360668 100644
+--- a/vllm_ascend/models/hy_v4_flash/index_pool_select.py
++++ b/vllm_ascend/models/hy_v4_flash/index_pool_select.py
+@@ -186,7 +186,11 @@ def select_pool_candidates(scores, visible, max_groups, ratio, budget):
+     history = selected * ratio + offsets
+     history = history.masked_fill(selected >= cutoff[:, None, None], -1).flatten(1)
+     tail = cutoff[:, None] * ratio + offsets
+-    return torch.cat((history, tail.masked_fill(tail > visible[:, None], -1)), dim=-1)
++    sparse = torch.cat((history, tail.masked_fill(tail > visible[:, None], -1)), dim=-1)
++    # Short rows have no sparse scores, but still need their complete history.
++    dense = torch.arange(sparse.shape[-1], device=visible.device).expand_as(sparse)
++    dense = dense.masked_fill(dense > visible[:, None], -1)
++    return torch.where((cutoff > budget)[:, None], sparse, dense)
+ 
+ 
+ def select_paged_pool(query, weights, cache, table, visible, page_size, max_groups, ratio, budget):
+diff --git a/vllm_ascend/models/hy_v4_flash/moe.py b/vllm_ascend/models/hy_v4_flash/moe.py
+index 6ef79fc9188da67b0b7fc65dc919e561d3f9cf12..271ee7731edfb46aace74e521da967afa19fd550 100644
+--- a/vllm_ascend/models/hy_v4_flash/moe.py
++++ b/vllm_ascend/models/hy_v4_flash/moe.py
+@@ -19,6 +19,18 @@ from .pd_role import uses_prefill_ops
+ ROUTER_TILE_ROWS = 64
+ 
+ 
++def rounded_moe_add_rms_norm(shared, routed, norm):
++    """Retain the expert sum's dtype boundary before the fused normalization.
++
++    AddRmsNorm normalizes its unrounded accumulator, although its residual
++    output is rounded. HY4's reference normalizes the rounded expert sum.
++    Keep the CANN fused operator, supplying an already-rounded sum so both
++    its accumulator and residual observe the reference value.
++    """
++    combined = shared + routed
++    return torch_npu.npu_add_rms_norm(combined, torch.zeros_like(combined), norm.weight, norm.variance_epsilon)[0]
++
++
+ class _RouterWeightPreparation:
+     def process_weights_after_loading(self, layer):
+         weight_fp32 = layer.weight.detach()
+@@ -110,7 +122,5 @@ class AscendFlashMoE(HYV4FlashMoE):
+         flat = hidden_states.reshape(-1, original_shape[-1])
+         router_logits, _ = self.gate(flat)
+         shared, routed = self.experts(hidden_states=flat, router_logits=router_logits)
+-        result = torch_npu.npu_add_rms_norm(
+-            shared, routed, self.combine_output_norm.weight, self.combine_output_norm.variance_epsilon
+-        )[0]
++        result = rounded_moe_add_rms_norm(shared, routed, self.combine_output_norm)
+         return result.view(original_shape)
+diff --git a/vllm_ascend/models/hy_v4_flash/precision_attention.py b/vllm_ascend/models/hy_v4_flash/precision_attention.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..9c35652c416893322fd9c7cd3a6f45ae9442fa8f
+--- /dev/null
++++ b/vllm_ascend/models/hy_v4_flash/precision_attention.py
+@@ -0,0 +1,85 @@
++# SPDX-License-Identifier: Apache-2.0
++"""FP32 QK and fused sink-softmax/PV without BF16 intermediates."""
++
++import torch
++from vllm.triton_utils import tl, triton
++
++
++@triton.jit
++def _sink_softmax_pv(
++    scores,
++    values,
++    selected,
++    sink,
++    output,
++    heads: tl.constexpr,
++    candidates: tl.constexpr,
++    value_width: tl.constexpr,
++    value_stride: tl.constexpr,
++    selected_stride: tl.constexpr,
++    scale: tl.constexpr,
++    BLOCK_K: tl.constexpr,
++    BLOCK_D: tl.constexpr,
++    INVALID_MASK: tl.constexpr,
++):
++    row_head = tl.program_id(0)
++    row = row_head // heads
++    head = row_head % heads
++    k = tl.arange(0, BLOCK_K)
++    d = tl.program_id(1) * BLOCK_D + tl.arange(0, BLOCK_D)
++    valid_k = k < candidates
++    ids = tl.load(selected + row * selected_stride + k, valid_k, 1 if INVALID_MASK else -1)
++    valid_ids = ids == 0 if INVALID_MASK else ids >= 0
++    logits = tl.load(scores + row_head * candidates + k, valid_k, 0) * scale
++    logits = tl.where(valid_k & valid_ids, logits, float("-inf"))
++    sink_logit = tl.load(sink + head).to(tl.float32)
++    maximum = tl.maximum(tl.max(logits, 0), sink_logit)
++    p = tl.exp(logits - maximum)
++    denominator = tl.sum(p, 0) + tl.exp(sink_logit - maximum)
++    result = tl.zeros((BLOCK_D,), tl.float32)
++    for start in range(tl.cdiv(candidates, 128)):
++        kk = start * 128 + tl.arange(0, 128)
++        index = tl.load(selected + row * selected_stride + kk, kk < candidates, 1 if INVALID_MASK else -1)
++        valid_index = index == 0 if INVALID_MASK else index >= 0
++        s = tl.load(scores + row_head * candidates + kk, kk < candidates, 0) * scale
++        probability = tl.exp(tl.where((kk < candidates) & valid_index, s, float("-inf")) - maximum) / denominator
++        value = tl.load(
++            values + row * candidates * value_stride + kk[:, None] * value_stride + d[None, :],
++            ((kk < candidates) & valid_index)[:, None] & (d[None, :] < value_width),
++            0,
++        ).to(tl.float32)
++        result += tl.sum(probability[:, None] * value, 0)
++    tl.store(output + row_head * value_width + d, result, d < value_width)
++
++
++def fused_fp32_mla_context(query, selected, kv, sink, scale, *, invalid_mask=None, scores=None, output_dtype=None):
++    rows, heads, _ = query.shape
++    candidates = selected.shape[-1]
++    values = kv.contiguous()
++    if scores is None:
++        scores = torch.bmm(query.float(), values.transpose(1, 2))
++    scores = scores.contiguous()
++    indices = selected if invalid_mask is None else invalid_mask.reshape(rows, candidates)
++    output = torch.empty((rows, heads, 512), device=query.device, dtype=output_dtype or query.dtype)
++    if rows == 0 or candidates == 0:
++        return output.zero_()
++    block_d = 64
++    _sink_softmax_pv[(rows * heads, triton.cdiv(512, block_d))](
++        scores,
++        values,
++        indices,
++        sink,
++        output,
++        heads,
++        candidates,
++        512,
++        values.shape[-1],
++        indices.stride(0),
++        scale,
++        triton.next_power_of_2(candidates),
++        block_d,
++        invalid_mask is not None,
++        num_warps=4,
++        enable_fp_fusion=False,
++    )
++    return output

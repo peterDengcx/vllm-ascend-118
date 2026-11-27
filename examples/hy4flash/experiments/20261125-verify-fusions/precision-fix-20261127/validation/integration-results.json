@@ -1,0 +1,330 @@
+[
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 1024,
+    "n": 1,
+    "eps": 1e-06
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 1024,
+    "n": 1,
+    "eps": 1e-05
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 1024,
+    "n": 6,
+    "eps": 1e-06
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 1024,
+    "n": 6,
+    "eps": 1e-05
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 1024,
+    "n": 48,
+    "eps": 1e-06
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 1024,
+    "n": 48,
+    "eps": 1e-05
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 1024,
+    "n": 96,
+    "eps": 1e-06
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 1024,
+    "n": 96,
+    "eps": 1e-05
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 2048,
+    "n": 1,
+    "eps": 1e-06
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 2048,
+    "n": 1,
+    "eps": 1e-05
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 2048,
+    "n": 6,
+    "eps": 1e-06
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 2048,
+    "n": 6,
+    "eps": 1e-05
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 2048,
+    "n": 48,
+    "eps": 1e-06
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 2048,
+    "n": 48,
+    "eps": 1e-05
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 2048,
+    "n": 96,
+    "eps": 1e-06
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 2048,
+    "n": 96,
+    "eps": 1e-05
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 4096,
+    "n": 1,
+    "eps": 1e-06
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 4096,
+    "n": 1,
+    "eps": 1e-05
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 4096,
+    "n": 6,
+    "eps": 1e-06
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 4096,
+    "n": 6,
+    "eps": 1e-05
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 4096,
+    "n": 48,
+    "eps": 1e-06
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 4096,
+    "n": 48,
+    "eps": 1e-05
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 4096,
+    "n": 96,
+    "eps": 1e-06
+  },
+  {
+    "name": "MoE_fixed",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "seed": 4096,
+    "n": 96,
+    "eps": 1e-05
+  },
+  {
+    "name": "C8_FP32_reader",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "n": 6,
+    "k": 512
+  },
+  {
+    "name": "FIA_fixed_reader",
+    "equal": false,
+    "max_abs": 3.0517578125e-05,
+    "relative_l2": 1.8505295884096995e-05,
+    "different_elements": 7,
+    "n": 6,
+    "k": 512
+  },
+  {
+    "name": "FIA_fixed_graph_replay",
+    "equal": false,
+    "max_abs": 6.103515625e-05,
+    "relative_l2": 6.372889038175344e-05,
+    "different_elements": 7,
+    "n": 6,
+    "k": 512
+  },
+  {
+    "name": "C8_FP32_reader",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "n": 6,
+    "k": 2048
+  },
+  {
+    "name": "FIA_fixed_reader",
+    "equal": false,
+    "max_abs": 7.62939453125e-06,
+    "relative_l2": 9.921093806042336e-06,
+    "different_elements": 16,
+    "n": 6,
+    "k": 2048
+  },
+  {
+    "name": "C8_FP32_reader",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "n": 48,
+    "k": 512
+  },
+  {
+    "name": "FIA_fixed_reader",
+    "equal": false,
+    "max_abs": 0.0001220703125,
+    "relative_l2": 4.983655162504874e-05,
+    "different_elements": 59,
+    "n": 48,
+    "k": 512
+  },
+  {
+    "name": "C8_FP32_reader",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "n": 6,
+    "k": 128
+  },
+  {
+    "name": "FIA_fixed_reader",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0,
+    "n": 6,
+    "k": 128
+  },
+  {
+    "name": "MoE_graph_replay",
+    "equal": true,
+    "max_abs": 0.0,
+    "relative_l2": 0.0,
+    "different_elements": 0
+  }
+]

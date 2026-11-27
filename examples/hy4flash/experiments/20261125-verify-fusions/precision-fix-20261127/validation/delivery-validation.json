@@ -1,0 +1,14 @@
+{
+  "incremental_apply": "passed",
+  "complete_apply": "passed",
+  "identical_result_tree": "5316230c5919a729215e9a2f27c55178257bd2bc",
+  "changed_file_postimages": "10/10 passed after LF normalization",
+  "remote_core_sources": "5/6 byte-identical; decode_fusions.py LF-normalized identical",
+  "remote_decode_fusions_raw_sha256": "33118e28c7075292086cde0fc9f685c5283e95ac2f984b9764cd2288e38f787b",
+  "remote_decode_fusions_lf_sha256": "91fa33a29612b975f937a1f942f449334e96136fba734febf1628bd56c77bc1f",
+  "format_ci": "attempted; blocked locally because pre-commit is not installed",
+  "npu_component_evidence": "historical repair iteration; not a full rerun of the final candidate",
+  "markdownlint": "passed for all 3 changed Markdown files",
+  "python_syntax": "9/9 archived Python files passed",
+  "whitespace": "git diff --cached --check passed"
+}

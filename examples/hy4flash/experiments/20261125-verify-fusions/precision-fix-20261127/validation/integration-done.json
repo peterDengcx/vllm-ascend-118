@@ -1,0 +1,10 @@
+{
+  "passed": true,
+  "cases": 34,
+  "source_sha256": {
+    "precision_attention.py": "d115aec54550b3f275a911345d847099ea6df6fd64f9cc2d627ad1fb324452f7",
+    "moe.py": "422f8d37a4c951a40124d93d329490b67f729a7addab3d4f0cf9a0f678057e55",
+    "decode_fusions.py": "410d18953311a4632b5097de6ae240f91d11d2d0bb9432dbad99c8c241b5fc14",
+    "c8_read.py": "b63afffc6c2125f7e97cda6d0883483e13ab813070c00079755a2ebc73bc435f"
+  }
+}

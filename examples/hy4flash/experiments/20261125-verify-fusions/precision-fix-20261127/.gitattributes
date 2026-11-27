@@ -1,0 +1,3 @@
+*.patch -text -whitespace
+source/** -text
+validation/*.log -text -whitespace

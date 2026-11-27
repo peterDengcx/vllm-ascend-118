@@ -1,5 +1,9 @@
 # Complete HY4 Decode fusion patch after withdrawal
 
+**2026-11-27：精度问题已修复，暂不合入主仓。**
+见[新容器精度修复、补丁和验证范围](../precision-fix-20261127/README.md)。
+后续复现使用该修复版；下文保留昨日归档的历史记录。
+
 The requested clean-container run with Prefill commits `821c4a1a4` and
 `bbec613749` stacked on this patch has now completed startup and four real
 inference requests. See [the resolved overlay, dependencies, launch instructions
